@@ -1,0 +1,26 @@
+# Entornos Virtuales
+venv/
+env/
+.venv/
+
+# Credenciales y Variables de Entorno
+.env
+*.json
+!package.json
+!tsconfig.json
+
+# Archivos compilados y caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# IDEs y Editores
+.vscode/
+.idea/
+*.swp

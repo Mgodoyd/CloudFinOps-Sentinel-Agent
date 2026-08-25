@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudFinOps Sentinel - Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .glow { box-shadow: 0 0 15px rgba(56, 189, 248, 0.5); }
+    </style>
+</head>
+<body class="min-h-screen p-8">
+    <div class="max-w-6xl mx-auto">
+        <header class="flex justify-between items-center mb-10">
+            <div>
+                <h1 class="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">CloudFinOps Sentinel</h1>
+                <p class="text-slate-400 mt-2">Autonomous Cloud Optimization & Auditing</p>
+            </div>
+            <div class="glass-panel px-6 py-3 rounded-full flex items-center gap-3">
+                <div class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse glow"></div>
+                <span class="text-sm font-medium">Agent Active</span>
+            </div>
+        </header>
+
+        <main class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div class="lg:col-span-2 space-y-6">
+                <!-- Approvals -->
+                <section class="glass-panel p-6 rounded-2xl">
+                    <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                        Pending Approvals (Human-in-the-Loop)
+                    </h2>
+                    <div id="approvals-container" class="space-y-4">
+                        <p class="text-slate-400 text-sm">Loading pending approvals...</p>
+                    </div>
+                </section>
+                
+                <!-- Active Resources -->
+                <section class="glass-panel p-6 rounded-2xl">
+                    <h2 class="text-xl font-semibold mb-4 flex items-center gap-2 text-blue-400">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        Monitoreo Activo (Recursos Saludables)
+                    </h2>
+                    <div id="active-resources-container" class="space-y-3">
+                        <p class="text-slate-400 text-sm">Cargando recursos activos...</p>
+                    </div>
+                </section>
+                
+                <!-- History -->
+                <section class="glass-panel p-6 rounded-2xl">
+                    <h2 class="text-xl font-semibold mb-4 text-cyan-400">Recent Remediations</h2>
+                    <div id="history-container" class="space-y-3">
+                        <p class="text-slate-400 text-sm">Loading history...</p>
+                    </div>
+                </section>
+            </div>
+
+            <div class="space-y-6">
+                <!-- Savings -->
+                <div class="glass-panel p-6 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900">
+                    <h3 class="text-sm text-slate-400 font-medium uppercase tracking-wider mb-2">Total Savings</h3>
+                    <p class="text-5xl font-bold text-emerald-400 glow" id="total-savings">$0.00</p>
+                    <p class="text-xs text-slate-500 mt-3">Calculated from approved remediations</p>
+                </div>
+                
+                <!-- Trigger -->
+                <div class="glass-panel p-6 rounded-2xl">
+                    <h3 class="text-sm text-slate-400 font-medium uppercase tracking-wider mb-4">Manual Trigger</h3>
+                    <button onclick="triggerAgent()" class="w-full py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-xl font-semibold transition-all shadow-lg hover:shadow-cyan-500/25">
+                        Run Audit Now
+                    </button>
+                    <p id="trigger-status" class="text-xs text-center mt-3 text-emerald-400 hidden">Audit initiated successfully!</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        async function fetchState() {
+            try {
+                const response = await fetch('/api/state');
+                const data = await response.json();
+                
+                // Update Approvals
+                const appContainer = document.getElementById('approvals-container');
+                if (data.approvals && data.approvals.length > 0) {
+                    appContainer.innerHTML = data.approvals.filter(a => a.status === 'PENDING').map(a => `
+                        <div class="p-5 rounded-xl bg-slate-800/50 border border-slate-700 flex flex-col gap-4 transition-all hover:border-slate-500">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <h4 class="font-bold text-slate-200 text-lg">${a.proposed_action}</h4>
+                                    <p class="text-sm font-medium text-slate-300 mt-1">Resource: ${a.resource_id}</p>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-sm text-emerald-400 font-bold bg-emerald-400/10 px-3 py-1 rounded-full">Est. Savings: $${a.estimated_roi}</p>
+                                </div>
+                            </div>
+                            
+                            <div class="bg-slate-900/50 p-3 rounded-lg border border-slate-700/50">
+                                <p class="text-sm text-slate-400 mb-2"><strong>Motivo:</strong> ${a.detailed_reason}</p>
+                                <a href="${a.resource_url}" target="_blank" class="inline-flex items-center text-sm text-blue-400 hover:text-blue-300 transition-colors">
+                                    🔍 Ver Recurso en GCP Console
+                                    <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                                </a>
+                            </div>
+
+                            <div class="flex justify-end gap-3 mt-2">
+                                <button onclick="handleApproval('${a.resource_id}', 'REJECTED')" class="px-5 py-2.5 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg font-medium transition-colors border border-red-500/30 hover:border-red-500/50">Deny</button>
+                                <button onclick="handleApproval('${a.resource_id}', 'APPROVED')" class="px-5 py-2.5 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded-lg font-medium transition-colors border border-emerald-500/30 hover:border-emerald-500/50">Approve Action</button>
+                            </div>
+                        </div>
+                    `).join('') || '<p class="text-slate-400 text-sm">No pending approvals.</p>';
+                } else {
+                    appContainer.innerHTML = '<p class="text-slate-400 text-sm">No pending approvals.</p>';
+                }
+
+                // Update Active Resources
+                const actContainer = document.getElementById('active-resources-container');
+                if (data.active_resources && data.active_resources.length > 0) {
+                    actContainer.innerHTML = data.active_resources.map(r => `
+                        <div class="p-3 rounded-lg bg-blue-900/20 border border-blue-800/30 flex justify-between items-center hover:bg-blue-900/30 transition-colors">
+                            <div>
+                                <span class="text-sm font-medium text-slate-200">${r.resource_id}</span>
+                                <span class="text-xs text-blue-400 ml-2 bg-blue-400/10 px-2 py-0.5 rounded">${r.type}</span>
+                            </div>
+                            <div class="flex items-center gap-4">
+                                <span class="text-xs text-slate-400">${r.metric}</span>
+                                <span class="flex items-center gap-1 text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full">
+                                    <div class="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
+                                    ${r.status}
+                                </span>
+                                <a href="${r.url}" target="_blank" class="text-slate-500 hover:text-slate-300">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                                </a>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    actContainer.innerHTML = '<p class="text-slate-400 text-sm">No active resources found.</p>';
+                }
+
+                // Update History
+                const histContainer = document.getElementById('history-container');
+                let totalSavings = 0;
+                if (data.remediations && data.remediations.length > 0) {
+                    histContainer.innerHTML = data.remediations.map(r => {
+                        totalSavings += r.savings || 0;
+                        return `
+                        <div class="p-3 rounded-lg bg-slate-800/30 border border-slate-700/50 flex justify-between items-center">
+                            <div>
+                                <span class="text-sm font-medium text-slate-300">${r.action}</span>
+                                <span class="text-xs text-slate-500 ml-2">(${r.event_id})</span>
+                            </div>
+                            <span class="text-emerald-400 text-sm font-medium">+$${r.savings}</span>
+                        </div>
+                    `}).join('');
+                } else {
+                    histContainer.innerHTML = '<p class="text-slate-400 text-sm">No recent activity.</p>';
+                }
+                
+                document.getElementById('total-savings').innerText = `$${totalSavings.toFixed(2)}`;
+
+            } catch (e) {
+                console.error("Failed to fetch state", e);
+            }
+        }
+
+        async function handleApproval(resourceId, status) {
+            try {
+                await fetch('/api/approvals', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({resource_id: resourceId, status: status})
+                });
+                fetchState();
+            } catch (e) {
+                console.error("Failed to update approval", e);
+            }
+        }
+
+        async function triggerAgent() {
+            try {
+                await fetch('/api/trigger', {method: 'POST'});
+                const status = document.getElementById('trigger-status');
+                status.classList.remove('hidden');
+                setTimeout(() => status.classList.add('hidden'), 3000);
+                setTimeout(fetchState, 2000);
+            } catch (e) {
+                console.error("Failed to trigger agent", e);
+            }
+        }
+
+        // Poll every 5 seconds
+        fetchState();
+        setInterval(fetchState, 5000);
+    </script>
+</body>
+</html>
