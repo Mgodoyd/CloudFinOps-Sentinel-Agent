@@ -15,6 +15,7 @@ os.environ["GEMINI_API_KEY"] = ""
 os.environ["USE_VERTEX"] = "false"
 os.environ["OTEL_ENABLED"] = "false"
 os.environ["STATE_BACKEND"] = "file"
+os.environ["DASHBOARD_TOKEN"] = "test-token"
 os.environ["STATE_FILE"] = os.path.join(tempfile.mkdtemp(), "memory_bank.json")
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -32,5 +33,7 @@ def clean_state():
 
 @pytest.fixture
 def client():
+    """An authenticated client. There is no unauthenticated mode to test with."""
     with TestClient(app) as c:
+        c.post("/api/login", json={"token": "test-token"})
         yield c

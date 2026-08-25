@@ -136,6 +136,9 @@ Cloud Run.
 | `METRICS_CACHE_TTL` | `60` | Seconds a Cloud Run listing is cached |
 | `STATE_FILE` | `data/memory_bank.json` | Local memory-bank path |
 | `STATE_BACKEND` | `auto` | `firestore` on Cloud Run, `file` locally |
+| `DASHBOARD_TOKEN` | *(generated locally)* | **Required.** Unlocks the dashboard and API |
+| `WEBHOOK_TOKEN` | *(falls back to dashboard)* | Separate credential for Cloud Scheduler |
+| `OTEL_ENABLED` | `true` | Export OpenTelemetry spans to Cloud Trace |
 | `MOCK_MODE` | `false` | Skip GCP entirely and use simulated infrastructure |
 | `SCAN_REGIONS` | `auto` | Regions to scan, or a comma-separated list |
 | `ALLOW_SIMULATED_FALLBACK` | `false` | Substitute demo data when a GCP call fails |
@@ -323,6 +326,29 @@ Rules cover Cloud Run (`IDLE_ALWAYS_ON`, `IDLE_SERVICE`, `OVERSIZED_ALLOCATION`)
 persistent disks (`ORPHANED_DISK`), static IPs (`UNUSED_STATIC_IP`) and Artifact
 Registry (`UNTAGGED_IMAGE`). Disk deletion and IP release are always Level 2
 regardless of savings, because both are irreversible.
+
+## Authentication
+
+There is no unauthenticated mode. Every endpoint that reads the estate or acts
+on it requires an operator token — locally and hosted alike. An "only in
+development" bypass is precisely what ends up deployed, and this dashboard
+deletes disks.
+
+```bash
+DASHBOARD_TOKEN=<your-token> uvicorn app.main:app --port 8080
+```
+
+Start without one and the agent generates a token for that run and prints it;
+it never falls back to serving openly. On Cloud Run nothing is generated — the
+operator supplies it deliberately, and until then every request is refused.
+
+The token is exchanged for an HttpOnly, SameSite=strict cookie; scripts can use
+`Authorization: Bearer <token>` instead. Comparison is constant-time.
+
+Cloud Scheduler authenticates with a **separate** `WEBHOOK_TOKEN`, so a leaked
+scheduler credential cannot press the approval buttons.
+
+`/health` stays open for Cloud Run probes and exposes nothing sensitive.
 
 ## Nothing runs until you ask
 

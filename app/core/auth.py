@@ -39,6 +39,26 @@ def auth_configured() -> bool:
     return bool(settings.DASHBOARD_TOKEN)
 
 
+def ensure_token() -> Optional[str]:
+    """Guarantee a token exists, generating one for local runs.
+
+    Returns the generated token so startup can print it once. On a hosted
+    deployment nothing is generated: the operator must supply it deliberately.
+    """
+    if settings.DASHBOARD_TOKEN:
+        return None
+    if is_managed_runtime():
+        logger.error(
+            "DASHBOARD_TOKEN is not set. Every endpoint will refuse requests. "
+            "Deploy with --set-secrets DASHBOARD_TOKEN=sentinel-dashboard-token:latest"
+        )
+        return None
+
+    generated = secrets.token_urlsafe(18)
+    settings.DASHBOARD_TOKEN = generated
+    return generated
+
+
 def _matches(provided: str, expected: str) -> bool:
     # Constant-time: a token check that returns early leaks its length.
     return bool(expected) and hmac.compare_digest(provided, expected)
@@ -75,14 +95,10 @@ async def require_operator(
     Accepts the session cookie or a bearer token, so the dashboard and `curl`
     both work without a second auth path to keep correct.
     """
+    # No exception for local development. An "only local" bypass is exactly the
+    # kind of thing that ends up deployed, and this dashboard deletes disks.
     if not auth_configured():
-        if is_managed_runtime():
-            # Fail closed. An open dashboard on a public URL can delete disks.
-            raise _unauthorised(
-                "DASHBOARD_TOKEN is not configured. Refusing to serve an "
-                "unauthenticated dashboard on a hosted deployment."
-            )
-        return  # local development
+        raise _unauthorised("No operator token configured; the dashboard is sealed.")
 
     if sentinel_session and sentinel_session in _sessions:
         return
@@ -104,9 +120,7 @@ async def require_webhook(
     """
     expected = settings.WEBHOOK_TOKEN or settings.DASHBOARD_TOKEN
     if not expected:
-        if is_managed_runtime():
-            raise _unauthorised("No webhook credential configured.")
-        return
+        raise _unauthorised("No webhook credential configured.")
 
     if x_sentinel_token and _matches(x_sentinel_token, expected):
         return
@@ -124,9 +138,5 @@ def describe() -> dict:
         "configured": auth_configured(),
         "managed_runtime": is_managed_runtime(),
         "active_sessions": len(_sessions),
-        "posture": (
-            "protected" if auth_configured()
-            else ("refusing (no token on a hosted deployment)" if is_managed_runtime()
-                  else "open (local development)")
-        ),
+        "posture": "protected" if auth_configured() else "sealed (no token configured)",
     }

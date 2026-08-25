@@ -22,9 +22,12 @@ READ_ENDPOINTS = [
 
 
 @pytest.fixture
-def protected(monkeypatch):
+def protected(client, monkeypatch):
+    """Rotate the token so the fixture's session is no longer valid — these
+    tests are about what an anonymous caller can reach."""
     monkeypatch.setattr(settings, "DASHBOARD_TOKEN", "s3cret-token")
     auth._sessions.clear()
+    client.cookies.clear()
     yield "s3cret-token"
     auth._sessions.clear()
 
@@ -86,7 +89,7 @@ def test_logout_ends_the_session(client, protected):
 
 
 # --- Fail closed ----------------------------------------------------------
-def test_a_hosted_deployment_without_a_token_refuses_to_serve(client, monkeypatch):
+def test_a_deployment_without_a_token_refuses_to_serve(client, monkeypatch):
     """Better to serve nothing than to serve delete buttons to the internet."""
     monkeypatch.setattr(settings, "DASHBOARD_TOKEN", "")
     monkeypatch.setenv("K_SERVICE", "cloudfinops-sentinel")
@@ -94,10 +97,33 @@ def test_a_hosted_deployment_without_a_token_refuses_to_serve(client, monkeypatc
     assert client.post("/api/reset").status_code == 401
 
 
-def test_local_development_stays_convenient(client, monkeypatch):
+def test_there_is_no_local_bypass(client, monkeypatch):
+    """An 'only local' exception is what ends up deployed. There is none."""
     monkeypatch.setattr(settings, "DASHBOARD_TOKEN", "")
     monkeypatch.delenv("K_SERVICE", raising=False)
-    assert client.get("/api/state").status_code == 200
+    assert client.get("/api/state").status_code == 401
+    assert client.post("/api/audit").status_code == 401
+
+
+def test_a_local_run_generates_a_token_rather_than_opening_up(monkeypatch):
+    """Convenience without a hole: local runs get a token, not an exemption."""
+    from app.core.auth import ensure_token
+
+    monkeypatch.setattr(settings, "DASHBOARD_TOKEN", "")
+    monkeypatch.delenv("K_SERVICE", raising=False)
+
+    generated = ensure_token()
+    assert generated and len(generated) >= 16
+    assert settings.DASHBOARD_TOKEN == generated
+
+
+def test_a_hosted_run_never_generates_a_token(monkeypatch):
+    """On Cloud Run the operator must supply it deliberately."""
+    from app.core.auth import ensure_token
+
+    monkeypatch.setattr(settings, "DASHBOARD_TOKEN", "")
+    monkeypatch.setenv("K_SERVICE", "cloudfinops-sentinel")
+    assert ensure_token() is None
 
 
 # --- The webhook is a separate credential ---------------------------------
@@ -117,6 +143,9 @@ def test_the_webhook_token_does_not_unlock_the_dashboard(client, monkeypatch):
     """A leaked scheduler credential must not grant the approval buttons."""
     monkeypatch.setattr(settings, "DASHBOARD_TOKEN", "dash")
     monkeypatch.setattr(settings, "WEBHOOK_TOKEN", "hook")
+    auth._sessions.clear()          # drop the fixture's session
+    client.cookies.clear()
+
     assert client.post("/api/login", json={"token": "hook"}).status_code == 401
     assert client.get(
         "/api/state", headers={"Authorization": "Bearer hook"}

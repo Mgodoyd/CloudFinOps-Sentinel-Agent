@@ -79,7 +79,12 @@ def test_invalid_status_is_rejected(client):
 
 def test_trigger_and_webhook(client):
     assert client.post("/api/trigger").json()["status"] == "initiated"
-    assert client.post("/webhook/pubsub", json={"message": {}}).json()["status"] == "accepted"
+    # The webhook is a separate credential from the operator session.
+    response = client.post(
+        "/webhook/pubsub", json={"message": {}},
+        headers={"X-Sentinel-Token": "test-token"},
+    )
+    assert response.json()["status"] == "accepted"
 
 
 def test_preflight_endpoint(client):

@@ -31,6 +31,7 @@ from app.tools.gcp_remediator import execute_approved_action
 from app.core.analyst import last_analysis
 from app.core.auth import (
     SESSION_COOKIE,
+    ensure_token,
     auth_configured,
     describe as describe_auth,
     issue_session,
@@ -89,6 +90,13 @@ async def lifespan(app: FastAPI):
     # The event loop is needed so worker threads can push trace steps to SSE.
     tracer.bind_loop(asyncio.get_running_loop())
     telemetry.init_telemetry(app)
+
+    generated = ensure_token()
+    if generated:
+        logger.warning(
+            "No DASHBOARD_TOKEN configured — generated one for this run only: %s",
+            generated,
+        )
     tracer.step(
         SYSTEM, "Sentinel online — waiting for an audit to be triggered",
         detail={"project": settings.PROJECT_ID, "regions": len(settings.regions),
