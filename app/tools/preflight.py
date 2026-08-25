@@ -1,0 +1,371 @@
+"""Preflight: verify this deployment can actually do real work.
+
+Checks credentials, every API the agent depends on, and write access — then
+reports exactly which `gcloud` command fixes each failure. Run it as a CLI:
+
+    python -m app.tools.preflight
+"""
+
+import json
+import logging
+from typing import Any, Dict, List, Optional
+
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+OK, FAIL, WARN, SKIP = "ok", "fail", "warn", "skip"
+
+
+def _check(name: str, status: str, detail: str, fix: str = "") -> Dict[str, str]:
+    return {"name": name, "status": status, "detail": detail, "fix": fix}
+
+
+def _is_quota(exc: Exception) -> bool:
+    text = str(exc)
+    return "RESOURCE_EXHAUSTED" in text or "429" in text
+
+
+def _uses_a_different_api(model: str) -> Optional[Dict[str, str]]:
+    """Catch models that exist but answer a different protocol.
+
+    Live models (`bidiGenerateContent`) speak the streaming Live API over a
+    WebSocket. Configuring one here fails in a way that looks like a broken
+    credential, so name the real reason.
+    """
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        for candidate in client.models.list():
+            if candidate.name.replace("models/", "") != model:
+                continue
+            actions = candidate.supported_actions or []
+            if "generateContent" in actions:
+                return None
+            return _check(
+                "Gemini (API key)", FAIL,
+                f"'{model}' does not support generateContent — it exposes "
+                f"{', '.join(actions) or 'no compatible action'}. "
+                "Live models speak the bidirectional streaming API, which this agent "
+                "does not use.",
+                "Pick a model whose supported actions include generateContent, "
+                "e.g. gemini-3.5-flash-lite.",
+            )
+    except Exception:
+        return None  # listing is a convenience; never block preflight on it
+    return None
+
+
+def _is_model_missing(exc: Exception) -> bool:
+    text = str(exc)
+    return "404" in text or "NOT_FOUND" in text or "no longer available" in text
+
+
+def _available_models() -> list:
+    """Ask the API which models this key can actually call."""
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        names = [
+            m.name.replace("models/", "")
+            for m in client.models.list()
+            if "generateContent" in (m.supported_actions or [])
+        ]
+        # Flash models are what this agent wants: cheap, fast, tool-capable.
+        return sorted(n for n in names if "flash" in n and "image" not in n
+                      and "tts" not in n and "lite" not in n)[:6]
+    except Exception:
+        return []
+
+
+def _gemini_failure(exc: Exception, name: str = "Gemini (API key)") -> Dict[str, str]:
+    """Distinguish a retired model from a bad credential.
+
+    A 404 here means "this model is not available to your key" — the key itself
+    is fine. Telling the operator to check their API key sends them to fix
+    something that is not broken.
+    """
+    if _is_model_missing(exc) and not _is_quota(exc):
+        options = _available_models()
+        suggestion = (
+            f"Set GEMINI_MODEL to one of: {', '.join(options)}"
+            if options
+            else "Run `client.models.list()` to see which models your key can call."
+        )
+        return _check(
+            name, FAIL,
+            f"Model '{settings.GEMINI_MODEL}' is not available to this API key "
+            "(Google retires models for keys created after a cutoff). The key itself is valid.",
+            suggestion,
+        )
+    if _is_quota(exc):
+        return _check(
+            name, WARN,
+            "Credentials work, but the quota is currently exhausted. Audits will "
+            "fall back to the deterministic heuristic until it resets.",
+            "The free tier allows 5 requests/minute. Lower MAX_TOOL_CALLS or move "
+            "to a paid tier.",
+        )
+    if "503" in str(exc) or "UNAVAILABLE" in str(exc):
+        return _check(name, WARN, "Gemini is temporarily overloaded; retry shortly.")
+    return _check(
+        name, FAIL, f"{type(exc).__name__}: {str(exc)[:160]}",
+        "Check GEMINI_API_KEY at https://aistudio.google.com/apikey",
+    )
+
+
+_SA_EMAIL: str = "<YOUR_SA_EMAIL>"
+
+
+def _classify(exc: Exception, api: str, permission: str) -> Dict[str, str]:
+    """Turn a Google API exception into an actionable instruction."""
+    text = str(exc)
+    if "has not been used in project" in text or "is disabled" in text:
+        return {
+            "detail": f"The {api} API is not enabled on this project.",
+            "fix": f"gcloud services enable {api} --project={settings.PROJECT_ID}",
+        }
+    if "403" in text or "PermissionDenied" in type(exc).__name__:
+        return {
+            "detail": f"The service account lacks '{permission}'.",
+            "fix": (
+                f"gcloud projects add-iam-policy-binding {settings.PROJECT_ID} \\\n"
+                f"  --member=serviceAccount:{_SA_EMAIL} --role=<ROLE>"
+            ),
+        }
+    return {"detail": f"{type(exc).__name__}: {text[:160]}", "fix": ""}
+
+
+def run_preflight() -> Dict[str, Any]:
+    """Run every check and return a structured report."""
+    checks: List[Dict[str, str]] = []
+
+    # --- project ----------------------------------------------------------
+    sa_email = None
+    if not settings.PROJECT_ID:
+        checks.append(
+            _check(
+                "Project", FAIL,
+                "No project could be resolved from the service-account key, the "
+                "environment, or the metadata server.",
+                "Set PROJECT_ID explicitly, or deploy with "
+                "--set-env-vars PROJECT_ID=<your-project>.",
+            )
+        )
+        return _summarise(checks, sa_email)
+
+    # --- credentials ------------------------------------------------------
+    if settings.MOCK_MODE:
+        checks.append(_check("Credentials", SKIP, "MOCK_MODE is on; GCP is not contacted."))
+    else:
+        try:
+            import google.auth
+
+            creds, detected = google.auth.default()
+            sa_email = getattr(creds, "service_account_email", None)
+            if sa_email:
+                global _SA_EMAIL
+                _SA_EMAIL = sa_email
+            checks.append(
+                _check(
+                    "Credentials",
+                    OK,
+                    f"Authenticated as {sa_email or 'ADC user'} on project {detected or settings.PROJECT_ID}.",
+                )
+            )
+        except Exception as exc:
+            checks.append(
+                _check(
+                    "Credentials", FAIL, f"No usable credentials: {exc}",
+                    "Place a service-account JSON in the project root, or run "
+                    "'gcloud auth application-default login'.",
+                )
+            )
+            return _summarise(checks, sa_email)
+
+    if settings.MOCK_MODE:
+        return _summarise(checks, sa_email)
+
+    # --- Cloud Run: read --------------------------------------------------
+    services: List[str] = []
+    try:
+        from google.cloud import run_v2
+
+        client = run_v2.ServicesClient()
+        found = list(
+            client.list_services(
+                request=run_v2.ListServicesRequest(
+                    parent=f"projects/{settings.PROJECT_ID}/locations/{settings.REGION}"
+                )
+            )
+        )
+        services = [s.name.split("/")[-1] for s in found]
+        checks.append(
+            _check(
+                "Cloud Run (read)",
+                OK if services else WARN,
+                f"Found {len(services)} service(s) in {settings.REGION}"
+                + (f": {', '.join(services[:5])}" if services else " — nothing to audit yet."),
+            )
+        )
+    except Exception as exc:
+        info = _classify(exc, "run.googleapis.com", "run.services.list")
+        info["fix"] = info["fix"].replace("<ROLE>", "roles/run.viewer")
+        checks.append(_check("Cloud Run (read)", FAIL, info["detail"], info["fix"]))
+
+    # --- Cloud Run: write -------------------------------------------------
+    if not settings.writes_enabled:
+        checks.append(
+            _check(
+                "Cloud Run (write)", SKIP,
+                "DRY_RUN is on — the agent reports changes instead of applying them.",
+                "Set DRY_RUN=false in .env to let the agent modify live services.",
+            )
+        )
+    elif services:
+        try:
+            from google.cloud import run_v2
+
+            client = run_v2.ServicesClient()
+            name = (f"projects/{settings.PROJECT_ID}/locations/{settings.REGION}"
+                    f"/services/{services[0]}")
+            service = client.get_service(request=run_v2.GetServiceRequest(name=name))
+
+            # validate_only proves the permission without persisting anything —
+            # the only honest way to test writes on live infrastructure.
+            client.update_service(
+                request=run_v2.UpdateServiceRequest(service=service, validate_only=True)
+            )
+            checks.append(
+                _check(
+                    "Cloud Run (write)", WARN,
+                    "DRY_RUN is OFF and services.update is permitted. Approved actions "
+                    "WILL modify live infrastructure.",
+                )
+            )
+        except Exception as exc:
+            info = _classify(exc, "run.googleapis.com", "run.services.update")
+            info["fix"] = info["fix"].replace("<ROLE>", "roles/run.admin")
+            checks.append(_check("Cloud Run (write)", FAIL, info["detail"], info["fix"]))
+
+    # --- Cloud Monitoring -------------------------------------------------
+    if not settings.USE_REAL_METRICS:
+        checks.append(_check("Cloud Monitoring", SKIP, "USE_REAL_METRICS is off; utilization is modelled."))
+    else:
+        try:
+            from app.tools import gcp_monitoring
+
+            data = gcp_monitoring.fetch_fleet_utilization()
+            if data is None:
+                checks.append(
+                    _check(
+                        "Cloud Monitoring", FAIL,
+                        "Metrics API unreachable; utilization falls back to a model.",
+                        f"gcloud services enable monitoring.googleapis.com --project={settings.PROJECT_ID}\n"
+                        "and grant roles/monitoring.viewer",
+                    )
+                )
+            else:
+                checks.append(
+                    _check(
+                        "Cloud Monitoring",
+                        OK if data else WARN,
+                        f"Real utilization available for {len(data)} service(s)."
+                        if data
+                        else "Connected, but no Cloud Run metrics yet (services need traffic).",
+                    )
+                )
+        except Exception as exc:
+            checks.append(_check("Cloud Monitoring", FAIL, str(exc)[:160]))
+
+    # --- Gemini -----------------------------------------------------------
+    if settings.USE_VERTEX:
+        try:
+            from google import genai
+
+            client = genai.Client(
+                vertexai=True, project=settings.PROJECT_ID, location=settings.REGION
+            )
+            client.models.generate_content(model=settings.GEMINI_MODEL, contents="ping")
+            checks.append(_check("Gemini (Vertex AI)", OK, f"{settings.GEMINI_MODEL} reachable."))
+        except Exception as exc:
+            if _is_quota(exc):
+                checks.append(_gemini_failure(exc, "Gemini (Vertex AI)"))
+            else:
+                info = _classify(exc, "aiplatform.googleapis.com", "aiplatform.endpoints.predict")
+                info["fix"] = info["fix"].replace("<ROLE>", "roles/aiplatform.user")
+                checks.append(_check("Gemini (Vertex AI)", FAIL, info["detail"], info["fix"]))
+    elif settings.GEMINI_API_KEY:
+        wrong_api = _uses_a_different_api(settings.GEMINI_MODEL)
+        if wrong_api:
+            checks.append(wrong_api)
+            return _summarise(checks, sa_email)
+        try:
+            from google import genai
+
+            # Keep a reference: a chained `genai.Client(...).models...` lets the
+            # client be collected mid-request, which surfaces as the misleading
+            # "Cannot send a request, as the client has been closed."
+            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            client.models.generate_content(model=settings.GEMINI_MODEL, contents="ping")
+            checks.append(_check("Gemini (API key)", OK, f"{settings.GEMINI_MODEL} reachable."))
+        except Exception as exc:
+            checks.append(_gemini_failure(exc))
+    else:
+        checks.append(
+            _check(
+                "Gemini", WARN,
+                "No LLM configured; the agent uses its deterministic heuristic.",
+                "Set GEMINI_API_KEY=<key>, or USE_VERTEX=true to use the service account.",
+            )
+        )
+
+    return _summarise(checks, sa_email)
+
+
+def _summarise(checks: List[Dict[str, str]], sa_email: Any) -> Dict[str, Any]:
+    failed = [c for c in checks if c["status"] == FAIL]
+    return {
+        "ready": not failed,
+        "project_id": settings.PROJECT_ID,
+        "region": settings.REGION,
+        "service_account": sa_email,
+        "dry_run": settings.DRY_RUN,
+        "mock_mode": settings.MOCK_MODE,
+        "checks": checks,
+        "failures": len(failed),
+    }
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.CRITICAL)
+    report = run_preflight()
+
+    GLYPH = {OK: "\033[32m✓\033[0m", FAIL: "\033[31m✗\033[0m",
+             WARN: "\033[33m!\033[0m", SKIP: "\033[90m-\033[0m"}
+
+    print(f"\n  CloudFinOps Sentinel — preflight")
+    print(f"  project: {report['project_id']}   region: {report['region']}")
+    if report["service_account"]:
+        print(f"  identity: {report['service_account']}")
+    print(f"  dry_run: {report['dry_run']}   mock_mode: {report['mock_mode']}\n")
+
+    for c in report["checks"]:
+        print(f"  {GLYPH[c['status']]} {c['name']}")
+        print(f"      {c['detail']}")
+        if c["fix"]:
+            for line in c["fix"].split("\n"):
+                print(f"      \033[36m→ {line}\033[0m")
+        print()
+
+    if report["ready"]:
+        print("  \033[32mReady for real workloads.\033[0m\n")
+    else:
+        print(f"  \033[31m{report['failures']} blocking issue(s).\033[0m "
+              "Fix the items above, then re-run.\n")
+
+
+if __name__ == "__main__":
+    main()
