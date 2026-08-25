@@ -253,3 +253,13 @@ def test_a_rejection_pushes_but_does_not_execute(client, monkeypatch):
 
     assert any(p.startswith("decision:") for p in pushed)
     assert not any(p.startswith("executed:") for p in pushed)
+
+
+def test_the_suite_is_hermetic():
+    """A judge cloning the repo must get a green run with no credentials,
+    no .env and no network."""
+    from app.core.config import settings
+
+    assert settings.PROJECT_ID, "tests must not depend on a discovered key file"
+    assert settings.MOCK_MODE is True
+    assert settings.GEMINI_API_KEY == ""
