@@ -6,6 +6,7 @@ env/
 # Credenciales y Variables de Entorno
 .env
 *.json
+*-*.json
 !package.json
 !tsconfig.json
 
@@ -24,3 +25,9 @@ htmlcov/
 .vscode/
 .idea/
 *.swp
+
+# Runtime state
+data/
+
+# Screenshots are committed; runtime state is not
+!docs/
