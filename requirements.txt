@@ -1,9 +1,22 @@
-fastapi
-uvicorn
-pydantic
-pydantic-settings
-google-genai
-google-cloud-firestore
-google-cloud-monitoring
-google-cloud-resource-manager
-google-cloud-run
+# --- Web layer ---
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+pydantic-settings>=2.6
+
+# --- Agent ---
+google-genai>=0.8
+
+# --- Google Cloud ---
+google-cloud-run>=0.10
+google-cloud-monitoring>=2.22
+google-cloud-firestore>=2.19
+google-cloud-resource-manager>=1.13
+google-cloud-compute>=1.19
+google-cloud-artifact-registry>=1.11
+
+# --- Observability ---
+opentelemetry-sdk>=1.27
+opentelemetry-api>=1.27
+opentelemetry-exporter-gcp-trace>=1.7
+opentelemetry-instrumentation-fastapi>=0.48b0
