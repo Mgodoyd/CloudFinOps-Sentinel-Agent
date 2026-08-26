@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 from app.core import telemetry
-from app.core.trace import ANALYSIS, PLANNING, tracer
+from app.core.trace import ANALYSIS, DECISION, PLANNING, tracer
 from app.core.analyst import FleetAnalyst, clear_analysis, last_analysis, store_analysis
 from app.core.executor import PlanExecutor
 from app.core.planner import MAX_REPLANS, Planner
@@ -215,6 +215,79 @@ class CloudFinOpsAgent:
         )
 
     # ------------------------------------------------------------------
+    def _reconcile_open_anomalies(self, analysis: Optional[Dict[str, Any]]) -> int:
+        """Guarantee that every open anomaly has something a human can act on.
+
+        The plan decides what to do; it may reasonably choose to skip. But an
+        anomaly the dashboard paints red with no ticket behind it is a dead end
+        for the operator, so anything still wasteful and still unhandled is
+        escalated here, worded from the model's own analysis.
+        """
+        from app.main import build_full_inventory
+
+        by_resource = (analysis or {}).get("by_resource", {})
+        raised = 0
+
+        try:
+            inventory = build_full_inventory(allow_discovery=False)
+        except Exception:
+            return 0
+
+        for res in inventory:
+            if res["status"] in ("Healthy", "Tolerated"):
+                continue
+            rid = res["resource_id"]
+            if memory_bank.has_pending_approval(rid):
+                continue
+            if memory_bank.last_rejection(rid):
+                continue  # a human already said no
+            history = memory_bank.check_history(rid)
+            if history.get("found") and history.get("applied", True):
+                continue  # really remediated; the next scan will re-evaluate
+
+            verdict = by_resource.get(rid, {})
+            kind = res.get("type", "Cloud Run")
+            action_type = {
+                "Persistent Disk": "delete_disk",
+                "Static IP": "release_address",
+                "Container Image": "delete_image",
+            }.get(kind, "resize_service")
+            action_key = {
+                "delete_disk": "act.delete_disk",
+                "release_address": "act.release_ip",
+                "delete_image": "act.purge_image",
+            }.get(action_type, "act.right_size")
+
+            request_human_approval(
+                resource_id=rid,
+                proposed_action=verdict.get("recommendation")
+                or f"Resolve {res['status'].lower()} {kind.lower()}",
+                estimated_roi=res["wasted_cost"],
+                resource_url=res.get("url", ""),
+                detailed_reason=verdict.get("diagnosis")
+                or f"{res['status']}: ${res['wasted_cost']:.2f}/mo recoverable.",
+                severity=res.get("severity", "MEDIUM"),
+                target_memory=verdict.get("target_memory") or "512Mi",
+                action_key=action_key,
+                action_type=action_type,
+                action_params={k: v for k, v in {
+                    "zone": res.get("zone") or res.get("location"),
+                    "region": res.get("region"),
+                    "min_instances": verdict.get("target_min_instances"),
+                }.items() if v is not None},
+                model_recommendation=verdict.get("recommendation", ""),
+            )
+            raised += 1
+
+        if raised:
+            tracer.step(
+                DECISION,
+                f"{raised} open anomal{'y' if raised == 1 else 'ies'} had no ticket — escalated",
+                status="warn",
+                detail={"reason": "every anomaly must be actionable"},
+            )
+        return raised
+
     def _plan_and_execute(
         self, data: Dict[str, Any], analysis: Dict[str, Any], fleet: List[Dict[str, Any]]
     ) -> Optional[str]:
@@ -637,6 +710,9 @@ class CloudFinOpsAgent:
             else:
                 summary = self._heuristic_audit(data)
                 mode = "heuristic"
+
+            # Structural guarantee, independent of what the plan chose to do.
+            self._reconcile_open_anomalies(analysis)
 
             snapshot = memory_bank.snapshot()
             actions = len(snapshot["remediations"]) + len(snapshot["approvals"]) - actions_before

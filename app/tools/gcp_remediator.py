@@ -49,6 +49,11 @@ def _current_shape(resource_id: str) -> Dict[str, Any]:
 def _already_handled(resource_id: str) -> str:
     """Return a message if this resource needs no further action right now."""
     history = memory_bank.check_history(resource_id)
+    if history.get("found") and not history.get("applied", True):
+        # A dry run changed nothing, so the resource is still exactly as
+        # wasteful as it was. Blocking it would leave an anomaly no one can act
+        # on — and the dashboard would show it red with no ticket.
+        return ""
     if history.get("found"):
         acted_on = history.get("last_state") or {}
         now = _current_shape(resource_id)

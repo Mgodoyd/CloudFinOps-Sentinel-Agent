@@ -207,7 +207,7 @@ def _non_compute_inventory(lang: str = DEFAULT_LANG, allow_discovery: bool = Tru
             **disk,
             "spec": f"{disk['size_gb']:.0f} GB {disk.get('disk_type', '')}",
             "location": disk.get("zone", ""),
-            "status": "Orphaned",
+            "status": _settled_or(disk["monthly_cost"], "Orphaned"),
             "wasted_cost": disk["monthly_cost"],
             "utilization": t(lang, "usage.unattached"),
             "url": (
@@ -221,7 +221,7 @@ def _non_compute_inventory(lang: str = DEFAULT_LANG, allow_discovery: bool = Tru
             **addr,
             "spec": addr.get("address", ""),
             "location": addr.get("region", ""),
-            "status": "Unused",
+            "status": _settled_or(addr["monthly_cost"], "Unused"),
             "wasted_cost": addr["monthly_cost"],
             "utilization": t(lang, "usage.not_in_use"),
             "url": f"https://console.cloud.google.com/networking/addresses/list?project={settings.PROJECT_ID}",
@@ -233,7 +233,7 @@ def _non_compute_inventory(lang: str = DEFAULT_LANG, allow_discovery: bool = Tru
             "resource_id": image.get("short_id") or image["resource_id"],
             "spec": image.get("repository", ""),
             "location": "registry",
-            "status": "Untagged",
+            "status": _settled_or(image.get("monthly_cost", 0.10), "Untagged"),
             "wasted_cost": image.get("monthly_cost", 0.10),
             "utilization": t(lang, "usage.untagged"),
             "url": f"https://console.cloud.google.com/artifacts?project={settings.PROJECT_ID}",
@@ -242,6 +242,14 @@ def _non_compute_inventory(lang: str = DEFAULT_LANG, allow_discovery: bool = Tru
     for item in items:
         item["rationale"] = explain(item, lang)
     return items
+
+
+def _settled_or(waste: float, status: str) -> str:
+    """Below the action threshold nothing will ever be proposed, so the
+    resource must not be painted as an open anomaly. Every type, not just
+    Cloud Run — otherwise the anomaly count and the approval queue disagree.
+    """
+    return "Tolerated" if waste < settings.MIN_SAVINGS_THRESHOLD else status
 
 
 def refresh_inventory() -> None:

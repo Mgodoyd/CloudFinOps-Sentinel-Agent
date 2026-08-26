@@ -24,9 +24,25 @@ def test_disk_deletion_always_requires_approval():
     assert r.delete_orphan_disk("disk-1", estimated_savings=1.0).startswith("PENDING_APPROVAL")
 
 
-def test_resource_is_never_remediated_twice():
+def test_a_resource_really_remediated_is_not_touched_again(monkeypatch):
+    """Loop protection applies to changes that actually happened."""
+    monkeypatch.setattr(settings, "DRY_RUN", False)
+    monkeypatch.setattr(settings, "MOCK_MODE", False)
+    monkeypatch.setattr("app.tools.gcp_actions.resize_service",
+                        lambda *a, **k: (True, "APPLIED"))
+
     r.resize_cloud_run("svc-dup", "512Mi", estimated_savings=5.0)
     assert r.resize_cloud_run("svc-dup", "256Mi", estimated_savings=5.0).startswith("SKIPPED")
+
+
+def test_a_dry_run_does_not_block_the_real_action():
+    """A simulated action changed nothing, so the waste is still there. Blocking
+    would leave an anomaly on the dashboard that no one could ever resolve."""
+    first = r.resize_cloud_run("svc-sim", "512Mi", estimated_savings=5.0)
+    assert first.startswith("DRY_RUN")
+
+    second = r.resize_cloud_run("svc-sim", "512Mi", estimated_savings=5.0)
+    assert not second.startswith("SKIPPED")
 
 
 def test_duplicate_approval_tickets_are_suppressed():

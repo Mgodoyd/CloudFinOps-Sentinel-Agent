@@ -7,6 +7,7 @@ import pytest
 from app.core.config import settings
 from app.core.executor import PlanExecutor
 from app.core.planner import TOOLBOX, VALID_TOOLS, Planner
+from app.tools import gcp_remediator as r
 from app.tools.memory_tools import memory_bank
 
 
@@ -184,3 +185,105 @@ def test_the_report_groups_by_outcome(monkeypatch):
     assert "**Applied**" in report and "svc-a" in report
     assert "**Awaiting approval**" in report and "disk-a" in report
     assert "**Skipped**" in report and "already right-sized" in report
+
+
+# --- Every anomaly must be actionable ------------------------------------
+def test_an_anomaly_the_plan_skipped_still_gets_a_ticket(client, monkeypatch):
+    """Regression: the dashboard showed anomalies with 0 pending approvals.
+
+    The plan may reasonably skip a step, but a red resource with no ticket is a
+    dead end for the operator.
+    """
+    from app.core.agent import CloudFinOpsAgent
+    from app.tools.memory_tools import memory_bank
+
+    agent = CloudFinOpsAgent()
+    monkeypatch.setattr(
+        "app.main.build_full_inventory",
+        lambda allow_discovery=True: [{
+            "resource_id": "ignored-by-the-plan", "type": "Cloud Run",
+            "status": "Idle", "severity": "HIGH",
+            "wasted_cost": 80.0, "monthly_cost": 100.0, "url": "",
+        }],
+    )
+
+    raised = agent._reconcile_open_anomalies({
+        "by_resource": {"ignored-by-the-plan": {
+            "recommendation": "Set min_instances to 0",
+            "diagnosis": "Always-on with no traffic",
+        }},
+    })
+
+    assert raised == 1
+    ticket = memory_bank.pending_approvals()[0]
+    assert ticket["resource_id"] == "ignored-by-the-plan"
+    assert ticket["proposed_action"] == "Set min_instances to 0", (
+        "the ticket must carry the model's wording, not a generic label"
+    )
+
+
+def test_reconciliation_respects_a_human_rejection(client, monkeypatch):
+    from app.core.agent import CloudFinOpsAgent
+    from app.tools.memory_tools import memory_bank
+
+    r.request_human_approval("declined", "Delete it", 50.0)
+    memory_bank.resolve_approval("declined", "REJECTED")
+
+    monkeypatch.setattr(
+        "app.main.build_full_inventory",
+        lambda allow_discovery=True: [{
+            "resource_id": "declined", "type": "Persistent Disk", "status": "Orphaned",
+            "severity": "HIGH", "wasted_cost": 50.0, "monthly_cost": 50.0, "url": "",
+        }],
+    )
+    assert CloudFinOpsAgent()._reconcile_open_anomalies({}) == 0
+
+
+def test_reconciliation_does_not_duplicate_an_open_ticket(client, monkeypatch):
+    from app.core.agent import CloudFinOpsAgent
+    from app.tools.memory_tools import memory_bank
+
+    r.request_human_approval("already-queued", "Resize", 60.0)
+    monkeypatch.setattr(
+        "app.main.build_full_inventory",
+        lambda allow_discovery=True: [{
+            "resource_id": "already-queued", "type": "Cloud Run", "status": "Idle",
+            "severity": "HIGH", "wasted_cost": 60.0, "monthly_cost": 70.0, "url": "",
+        }],
+    )
+    assert CloudFinOpsAgent()._reconcile_open_anomalies({}) == 0
+    assert len(memory_bank.pending_approvals()) == 1
+
+
+def test_settled_resources_are_never_escalated(client, monkeypatch):
+    from app.core.agent import CloudFinOpsAgent
+
+    monkeypatch.setattr(
+        "app.main.build_full_inventory",
+        lambda allow_discovery=True: [
+            {"resource_id": "ok", "type": "Cloud Run", "status": "Healthy",
+             "severity": "LOW", "wasted_cost": 0.0, "monthly_cost": 5.0, "url": ""},
+            {"resource_id": "minor", "type": "Cloud Run", "status": "Tolerated",
+             "severity": "LOW", "wasted_cost": 1.0, "monthly_cost": 2.0, "url": ""},
+        ],
+    )
+    assert CloudFinOpsAgent()._reconcile_open_anomalies({}) == 0
+
+
+def test_the_ticket_type_matches_the_resource(client, monkeypatch):
+    """A disk must not be queued as a Cloud Run resize."""
+    from app.core.agent import CloudFinOpsAgent
+    from app.tools.memory_tools import memory_bank
+
+    monkeypatch.setattr(
+        "app.main.build_full_inventory",
+        lambda allow_discovery=True: [{
+            "resource_id": "a-disk", "type": "Persistent Disk", "status": "Orphaned",
+            "severity": "HIGH", "wasted_cost": 40.0, "monthly_cost": 40.0,
+            "location": "us-central1-a", "url": "",
+        }],
+    )
+    CloudFinOpsAgent()._reconcile_open_anomalies({})
+    ticket = memory_bank.pending_approvals()[0]
+    assert ticket["action_type"] == "delete_disk"
+    assert ticket["action_params"]["zone"] == "us-central1-a"

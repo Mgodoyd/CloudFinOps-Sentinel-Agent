@@ -35,12 +35,19 @@ def test_audit_creates_actions_and_run_record(client):
     assert runs[-1]["finished_at"] is not None
 
 
-def test_audit_is_idempotent(client):
-    """A second audit must not re-remediate resources handled in the first."""
+def test_a_second_audit_does_not_duplicate_approval_tickets(client):
+    """Re-auditing must not queue the same decision twice for a human.
+
+    (Whether a *remediation* repeats depends on whether the first one actually
+    changed anything — covered in test_remediator.)
+    """
     client.post("/api/audit")
-    first = len(memory_bank.snapshot()["remediations"])
+    first = {a["resource_id"] for a in memory_bank.pending_approvals()}
     client.post("/api/audit")
-    assert len(memory_bank.snapshot()["remediations"]) == first
+    second = memory_bank.pending_approvals()
+
+    assert len(second) == len(first), "a human must not be asked twice"
+    assert {a["resource_id"] for a in second} == first
 
 
 def test_approval_flow(client):
@@ -299,3 +306,29 @@ def test_an_executed_action_refreshes_the_inventory(client, monkeypatch):
 
     _, source = gcp_metrics.describe_resources(allow_discovery=False)
     assert source == "gcp", "the dashboard must now see fresh data"
+
+
+def test_every_anomaly_has_something_to_approve(client):
+    """Regression: the dashboard showed 3 anomalies and 1 pending approval —
+    two of them could never be acted on, so the red count was a dead end."""
+    client.post("/api/audit")
+    body = client.get("/api/state").json()
+
+    open_anomalies = {r["resource_id"] for r in body["inventory"]
+                      if r["status"] not in ("Healthy", "Tolerated")}
+    actionable = {a["resource_id"] for a in body["approvals"]}
+    actionable |= {r["resource_id"] for r in body["remediations"]}
+
+    assert open_anomalies <= actionable, (
+        f"anomalies with no ticket and no action: {open_anomalies - actionable}"
+    )
+
+
+def test_below_threshold_resources_of_any_type_read_as_settled(client):
+    """The value threshold applied only to Cloud Run, so a $4 orphaned disk
+    was painted red while the executor silently skipped it."""
+    from app.core.config import settings
+    from app.main import _settled_or
+
+    assert _settled_or(settings.MIN_SAVINGS_THRESHOLD - 0.01, "Orphaned") == "Tolerated"
+    assert _settled_or(settings.MIN_SAVINGS_THRESHOLD + 1, "Orphaned") == "Orphaned"

@@ -175,6 +175,7 @@ class MemoryBank:
             "last_action": last["action"],
             "last_timestamp": last["timestamp"],
             "last_state": last.get("resource_state") or {},
+            "applied": last.get("applied", True),
             "times_remediated": len(matches),
         }
 
