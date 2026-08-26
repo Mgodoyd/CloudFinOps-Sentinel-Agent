@@ -266,6 +266,16 @@ did not look". `MOCK_MODE` never queries it: a simulated fleet has no invoice.
 The query is bounded by `maximum_bytes_billed` and a date filter, because a
 runaway scan over a billing export is itself a cost incident.
 
+Enabling it is two steps and one wait. Create a BigQuery dataset, then under
+**Billing → Billing export → BigQuery export** enable **Detailed usage cost** —
+not Standard, which has no `resource.name` and cannot attribute a charge to a
+service. Google starts writing rows within about 24 hours and does not backfill,
+so an empty dataset on the first day is expected rather than a misconfiguration.
+
+```bash
+python scripts/billing_table.py   # finds the table and writes it into .env
+```
+
 Preflight says which source you are looking at, and `/api/preflight` reports it
 before an audit ever runs.
 
