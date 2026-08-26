@@ -159,3 +159,14 @@ def test_preflight_says_which_cost_source_is_in_use():
     assert check["status"] == "skip"
     assert "estimated" in check["detail"]
     assert "BILLING_EXPORT_TABLE" in check["fix"]
+
+
+def test_the_suite_never_inherits_a_real_billing_table():
+    """A test run must not issue BigQuery jobs against a real billing export.
+
+    Settings are read from .env like everything else, so an operator who has
+    configured the export would have `pytest` scan a partitioned table that is
+    billed by bytes read. Cleared in conftest; asserted here so the clearing
+    cannot quietly be dropped.
+    """
+    assert settings.BILLING_EXPORT_TABLE == ""

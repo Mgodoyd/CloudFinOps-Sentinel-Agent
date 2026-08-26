@@ -21,6 +21,10 @@ os.environ["STATE_FILE"] = os.path.join(tempfile.mkdtemp(), "memory_bank.json")
 # with a real bot token configured would have the suite deliver test tickets to
 # their actual chat. Cleared explicitly: the tests that need a channel set one
 # themselves.
+# Same reasoning for the billing export, with money attached: a configured
+# table would have the suite issue real BigQuery jobs against a partitioned
+# billing table, which is billed by bytes scanned.
+os.environ["BILLING_EXPORT_TABLE"] = ""
 os.environ["SLACK_WEBHOOK_URL"] = ""
 os.environ["TELEGRAM_BOT_TOKEN"] = ""
 os.environ["TELEGRAM_CHAT_ID"] = ""
