@@ -329,6 +329,31 @@ TELEGRAM_BOT_TOKEN=123456:AA...   TELEGRAM_CHAT_ID=-100...
 DASHBOARD_URL=https://cloudfinops-sentinel-....run.app
 ```
 
+**Setting up Telegram**, which takes about a minute:
+
+1. Message [@BotFather](https://t.me/BotFather), send `/newbot`, and copy the
+   token it gives you into `TELEGRAM_BOT_TOKEN`.
+2. Send your new bot any message, then open
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy `result[0].message.chat.id`
+   into `TELEGRAM_CHAT_ID`. A bot cannot start a conversation, so this first
+   message is what lets it reply.
+3. Confirm it took, without waiting for an audit:
+
+```bash
+curl -H "Authorization: Bearer $DASHBOARD_TOKEN" localhost:8080/api/preflight
+# → Notifications  ok  "Approval tickets are pushed to telegram."
+```
+
+Preflight warns when no channel is configured, because a scheduled run raising
+a ticket at 3am into an empty room looks exactly like a run that found nothing.
+
+Delivery is visible where every other action is — on the trace:
+
+```
+DECISION   Autonomy Level 2 → escalating checkout-api for human approval
+APPROVAL   Approval for checkout-api pushed to slack, telegram      ▸ detail
+```
+
 The message carries the money, the resource, and **the target shape that will
 be applied** — the same contract the approver sees in the deck — plus a link
 back into it.
@@ -493,7 +518,7 @@ MOCK_MODE=true DASHBOARD_TOKEN=dev-token \
 
 Open <http://localhost:8080> and unlock it with `dev-token`. Press **RUN AUDIT**.
 
-Run the tests with `pytest` — **343 pass, 2 skip** (the two need the
+Run the tests with `pytest` — **348 pass, 2 skip** (the two need the
 OpenTelemetry exporter), no credentials needed.
 
 ### Point it at a real GCP project
@@ -785,7 +810,7 @@ human-facing `verdict` is localised.
 pytest
 ```
 
-345 tests — 343 pass and 2 skip where the OpenTelemetry exporter is
+350 tests — 348 pass and 2 skip where the OpenTelemetry exporter is
 unavailable — covering the memory bank, cost math, the autonomy matrix, the DRY_RUN
 safety gate, tool serialization, LLM analysis and failure handling, model
 fallbacks, action dispatch per resource type, the real-data guarantees, the
@@ -830,7 +855,7 @@ app/
     static/js/i18n.js     UI string catalogue (en/es)
 deploy/                   One-command Cloud Run deploy + Cloud Scheduler
 docs/                     Architecture notes, diagrams and screenshots
-tests/                    345 tests, no credentials needed
+tests/                    350 tests, no credentials needed
 ```
 
 ## Known limitations

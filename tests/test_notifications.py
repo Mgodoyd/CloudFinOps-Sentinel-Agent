@@ -210,3 +210,57 @@ def test_a_dead_webhook_does_not_lose_the_ticket(monkeypatch, slack):
         "the ticket is persisted before anyone is told; a failed notification "
         "must never take the finding with it"
     )
+
+
+# --- 5. the operator can see that it happened ------------------------------
+def test_a_delivery_lands_on_the_trace(slack, post):
+    """Without this the feature is invisible: nothing in the UI says a
+    notification was sent, so nobody can tell it works — including in a demo."""
+    from app.core.trace import tracer
+
+    tracer.clear()
+    notifications.send_approval_request(TICKET)
+
+    steps = [s for s in tracer.steps() if s["phase"] == "APPROVAL"]
+    assert steps, "a notification is something the agent did; it belongs on the trace"
+    assert "slack" in steps[-1]["message"]
+    assert steps[-1]["detail"]["delivered"] == ["slack"]
+
+
+def test_a_failed_delivery_says_so_on_the_trace(monkeypatch, slack):
+    from app.core.trace import tracer
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", Recorder(raises=OSError("down")))
+    tracer.clear()
+    notifications.send_approval_request(TICKET)
+
+    step = [s for s in tracer.steps() if s["phase"] == "APPROVAL"][-1]
+    assert "Could not notify" in step["message"]
+    assert step["detail"]["failed"] == ["slack"]
+
+
+def test_silence_is_not_traced(post):
+    """No channel configured is a choice, not an event."""
+    from app.core.trace import tracer
+
+    tracer.clear()
+    notifications.send_approval_request(TICKET)
+    assert not [s for s in tracer.steps() if s["phase"] == "APPROVAL"]
+
+
+# --- 6. preflight says whether anyone will hear about it --------------------
+def test_preflight_warns_when_nobody_will_be_told():
+    from app.tools.preflight import run_preflight
+
+    check = [c for c in run_preflight()["checks"] if c["name"] == "Notifications"][0]
+    assert check["status"] == "warn"
+    assert "TELEGRAM_BOT_TOKEN" in check["fix"]
+
+
+def test_preflight_names_the_configured_channels(telegram):
+    from app.tools.preflight import run_preflight
+
+    check = [c for c in run_preflight()["checks"] if c["name"] == "Notifications"][0]
+    assert check["status"] == "ok"
+    assert "telegram" in check["detail"]

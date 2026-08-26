@@ -18,6 +18,7 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import settings
+from app.core.trace import APPROVAL, INFO, WARN, tracer
 
 logger = logging.getLogger(__name__)
 
@@ -179,9 +180,23 @@ def send_approval_request(ticket: Dict[str, Any]) -> Dict[str, bool]:
 
     if results:
         delivered = [c for c, ok in results.items() if ok]
+        failed = [c for c, ok in results.items() if not ok]
         logger.info(
             "Approval for %s notified to %s",
             ticket.get("resource_id"), ", ".join(delivered) or "no channel",
+        )
+        # On the trace, because a notification is a thing the agent did and the
+        # operator has no other way to know it happened. Delivery runs on its
+        # own thread; the tracer is lock-guarded, so this is safe from here.
+        tracer.step(
+            APPROVAL,
+            (f"Approval for {ticket.get('resource_id')} pushed to "
+             f"{', '.join(delivered)}" if delivered
+             else f"Could not notify anyone about {ticket.get('resource_id')}"),
+            status=INFO if delivered else WARN,
+            resource_id=ticket.get("resource_id"),
+            detail={"delivered": delivered, "failed": failed or None,
+                    "estimated_saving_monthly": ticket.get("estimated_roi")},
         )
     return results
 

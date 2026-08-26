@@ -154,6 +154,7 @@ def run_preflight() -> Dict[str, Any]:
                 "--set-env-vars PROJECT_ID=<your-project>.",
             )
         )
+        checks.append(_notification_check())
         return _summarise(checks, sa_email)
 
     # --- credentials ------------------------------------------------------
@@ -183,9 +184,11 @@ def run_preflight() -> Dict[str, Any]:
                     "'gcloud auth application-default login'.",
                 )
             )
+            checks.append(_notification_check())
             return _summarise(checks, sa_email)
 
     if settings.MOCK_MODE:
+        checks.append(_notification_check())
         return _summarise(checks, sa_email)
 
     # --- Cloud Run: read --------------------------------------------------
@@ -301,6 +304,7 @@ def run_preflight() -> Dict[str, Any]:
         wrong_api = _uses_a_different_api(settings.GEMINI_MODEL)
         if wrong_api:
             checks.append(wrong_api)
+            checks.append(_notification_check())
             return _summarise(checks, sa_email)
         try:
             from google import genai
@@ -322,7 +326,31 @@ def run_preflight() -> Dict[str, Any]:
             )
         )
 
+    checks.append(_notification_check())
     return _summarise(checks, sa_email)
+
+
+def _notification_check() -> Dict[str, str]:
+    """Whether an approval will actually reach anyone.
+
+    A Level 2 ticket nobody is told about is a human-in-the-loop that depends on
+    someone opening the dashboard. Silence is a valid choice, so this warns
+    rather than fails — but it has to be visible before a scheduled run raises a
+    ticket at 3am into an empty room.
+    """
+    from app.tools.notifications import configured_channels
+
+    channels = configured_channels()
+    if channels:
+        return _check(
+            "Notifications", OK,
+            f"Approval tickets are pushed to {', '.join(channels)}.",
+        )
+    return _check(
+        "Notifications", WARN,
+        "No channel configured; approval tickets wait in the dashboard only.",
+        "Set SLACK_WEBHOOK_URL, or TELEGRAM_BOT_TOKEN with TELEGRAM_CHAT_ID.",
+    )
 
 
 def _summarise(checks: List[Dict[str, str]], sa_email: Any) -> Dict[str, Any]:
