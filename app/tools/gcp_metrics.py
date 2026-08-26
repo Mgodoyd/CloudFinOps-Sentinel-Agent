@@ -148,6 +148,15 @@ def last_problems() -> List[Dict[str, str]]:
     return list(_last_problems)
 
 
+def seed_services(services: List[Dict[str, Any]]) -> None:
+    """Populate the service cache from a scan someone else already did.
+
+    `discover_all` lists Cloud Run as one of its four parallel sources. Without
+    this the refresh path would list it a second time for the same data.
+    """
+    _services_cache.set((services, "gcp"))
+
+
 def has_scanned() -> bool:
     """True once a scan has run, regardless of how long ago."""
     from app.tools import gcp_inventory
@@ -564,20 +573,70 @@ def build_charts(
     return charts
 
 
+SETTLED_STATES = ("Healthy", "Tolerated")
+
+
+def _efficiency_radar(estate, resources, remediations) -> List[Dict[str, Any]]:
+    """Six dimensions of *efficiency*, not of raw utilization.
+
+    The earlier version plotted average CPU and memory directly, which inverted
+    the meaning: a service that correctly scales to zero sits at 1% CPU and
+    dragged the score down, so a perfectly optimised fleet scored badly. These
+    axes measure how close the estate is to the shape it should have.
+    """
+    count = max(len(estate), 1)
+    total_cost = sum(r["monthly_cost"] for r in estate) or 1.0
+    total_waste = sum(r["wasted_cost"] for r in estate)
+    settled = [r for r in estate if r["status"] in SETTLED_STATES]
+
+    # 1. How much of the bill is actually buying something.
+    cost = 100 * (1 - min(1.0, total_waste / total_cost))
+
+    # 2. How many resources have no recoverable waste worth acting on.
+    right_sized = 100 * len(settled) / count
+
+    # 3. Scale-to-zero where it is warranted: an always-on service that is busy
+    #    is fine; an always-on service that is idle is not.
+    scaling_ok = 0
+    for r in resources:
+        min_instances = int(r.get("min_instances") or 0)
+        if min_instances == 0 or r["cpu_utilization"] >= 10:
+            scaling_ok += 1
+    scaling = 100 * scaling_ok / max(len(resources), 1) if resources else 100.0
+
+    # 4. Judged on measurements rather than a model.
+    measured = len([r for r in resources if r.get("metrics_source") == "monitoring"])
+    observability = 100 * measured / max(len(resources), 1) if resources else 100.0
+
+    # 5. Findings the agent resolved on its own, out of everything it found.
+    #    Nothing to fix reads as fully automated, not as zero.
+    open_findings = len([r for r in estate if r["status"] not in SETTLED_STATES])
+    handled = len(remediations)
+    automation = 100.0 if not (open_findings + handled) else (
+        100 * handled / (open_findings + handled)
+    )
+
+    # 6. Nothing irreversible left lying around unattended.
+    orphans = len([r for r in estate if r["status"] in ("Orphaned", "Unused")])
+    governance = 100 * (1 - orphans / count)
+
+    return [
+        {"axis": "radar.cost", "value": round(cost, 1)},
+        {"axis": "radar.rightsizing", "value": round(right_sized, 1)},
+        {"axis": "radar.scaling", "value": round(scaling, 1)},
+        {"axis": "radar.observability", "value": round(observability, 1)},
+        {"axis": "radar.automation", "value": round(automation, 1)},
+        {"axis": "radar.governance", "value": round(governance, 1)},
+    ]
+
+
 def _assemble_charts(
     ranking, distribution, trend, resources, remediations, estate=None
 ) -> Dict[str, Any]:
     estate = estate if estate is not None else resources
     total_cost = sum(r["monthly_cost"] for r in estate) or 1.0
     total_waste = sum(r["wasted_cost"] for r in estate)
-    radar = [
-        {"axis": "radar.cost", "value": round(100 * (1 - total_waste / total_cost), 1)},
-        {"axis": "radar.cpu", "value": round(sum(r["cpu_utilization"] for r in resources) / max(len(resources), 1), 1)},
-        {"axis": "radar.memory", "value": round(sum(r["memory_utilization"] for r in resources) / max(len(resources), 1), 1)},
-        {"axis": "radar.coverage", "value": round(100 * len([r for r in estate if r["status"] != "Idle"]) / max(len(estate), 1), 1)},
-        {"axis": "radar.automation", "value": min(100.0, round(len(remediations) * 12.5, 1))},
-        {"axis": "radar.governance", "value": round(100 * len([r for r in estate if r["status"] in ("Healthy", "Tolerated")]) / max(len(estate), 1), 1)},
-    ]
+    radar = _efficiency_radar(estate, resources, remediations)
 
     # Cumulative realized savings over the remediation history.
     cumulative, running = [], 0.0

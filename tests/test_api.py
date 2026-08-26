@@ -268,3 +268,34 @@ def test_the_suite_is_hermetic():
     assert settings.PROJECT_ID, "tests must not depend on a discovered key file"
     assert settings.MOCK_MODE is True
     assert settings.GEMINI_API_KEY == ""
+
+
+def test_an_executed_action_refreshes_the_inventory(client, monkeypatch):
+    """Regression: after approving, the SSE push arrived but /api/state still
+    served the cached inventory — so costs, states and charts stayed stale
+    until the next scan."""
+    from app.main import refresh_inventory
+    from app.tools import gcp_inventory, gcp_metrics
+
+    calls = []
+    original = gcp_inventory.discover_cloud_run
+    monkeypatch.setattr(
+        gcp_inventory, "discover_cloud_run",
+        lambda: (calls.append(1), original())[1],
+    )
+
+    gcp_metrics._services_cache.reset()
+    gcp_inventory._discovery_cache.reset()
+
+    gcp_metrics.describe_resources()
+    after_first = len(calls)
+    gcp_metrics.describe_resources()
+    assert len(calls) == after_first, "a cached read must not hit GCP"
+
+    refresh_inventory()
+    assert len(calls) == after_first + 1, (
+        "a post-action refresh must re-read GCP exactly once, not zero or twice"
+    )
+
+    _, source = gcp_metrics.describe_resources(allow_discovery=False)
+    assert source == "gcp", "the dashboard must now see fresh data"

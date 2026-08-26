@@ -244,6 +244,28 @@ def _non_compute_inventory(lang: str = DEFAULT_LANG, allow_discovery: bool = Tru
     return items
 
 
+def refresh_inventory() -> None:
+    """Re-read the estate from GCP after the agent changed something.
+
+    Deliberate, not incidental: polling still never triggers a scan. This runs
+    only when an action has just made the cache untrue.
+    """
+    from app.tools import gcp_inventory
+
+    with telemetry.span("agent.refresh_after_action"):
+        try:
+            # One scan, not two: discover_all already lists Cloud Run, so its
+            # result seeds the service cache instead of being fetched again.
+            found = gcp_inventory.discover_all(force_refresh=True)
+            gcp_metrics.seed_services(found.get("cloud_run", []))
+            gcp_metrics._utilization_cache.clear()
+            tracer.step(SYSTEM, "Inventory re-read after the change",
+                        detail={"reason": "post-execution",
+                                "resources": len(found.get("cloud_run", []))})
+        except Exception as exc:
+            logger.warning("Could not refresh the inventory after acting: %s", exc)
+
+
 def build_full_inventory(allow_discovery: bool = True) -> List[Dict[str, Any]]:
     """Every managed resource, of every type, in one list."""
     resources, _ = describe_resources(allow_discovery=allow_discovery)
@@ -437,6 +459,10 @@ async def handle_approval(req: ApprovalRequest):
 
     if req.status.value == "APPROVED":
         await asyncio.to_thread(execute_approved_action, req.resource_id)
+        # The change just altered live infrastructure, so the cached inventory
+        # is now wrong. Re-read it before telling clients to refresh, otherwise
+        # they redraw the same stale costs and states.
+        await asyncio.to_thread(refresh_inventory)
         tracer.notify_state_changed(f"executed:{req.resource_id}")
 
     return {"status": "success", "ticket": approval}
