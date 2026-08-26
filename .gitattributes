@@ -1,0 +1,23 @@
+# Git for Windows checks out CRLF by default. A shell script with CRLF fails on
+# the first line with `$'\r': command not found`, and the same script copied
+# into the Linux container fails identically at runtime — so this is not a
+# cosmetic setting, it decides whether a deploy from Windows works at all.
+* text=auto eol=lf
+
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.py        text eol=lf
+*.html      text eol=lf
+*.css       text eol=lf
+*.js        text eol=lf
+*.md        text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.toml      text eol=lf
+.env.example text eol=lf
+
+# Never touched: a normalised byte is a corrupted file.
+*.png binary
+*.jpg binary
+*.pdf binary
+*.ico binary
