@@ -15,7 +15,7 @@ hold up an audit.
 
 import logging
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.config import settings
 from app.core.trace import APPROVAL, INFO, WARN, tracer
@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 
 # Kept short: this is a courtesy message, not a step of the workflow.
 _SEVERITY_EMOJI = {"HIGH": "🔴", "MEDIUM": "🟠", "LOW": "🟡"}
+
+# Tickets whose delivery is running right now. A ticket is notified when it is
+# raised, on its own thread, and `announce_pending` sweeps up whatever nobody
+# was told about — so without this the sweep can read a ticket after the thread
+# started and before it recorded success, and send the same approval twice. It
+# showed up in the field as two identical messages a minute apart.
+_in_flight: Set[str] = set()
+_in_flight_lock = threading.Lock()
 
 
 def configured_channels() -> List[str]:
@@ -228,6 +236,9 @@ def announce_pending(limit: int = 10) -> int:
 
     announced = 0
     for ticket in memory_bank.unannounced_approvals()[:limit]:
+        with _in_flight_lock:
+            if ticket.get("ticket_id") in _in_flight:
+                continue  # its own delivery is already running
         results = send_approval_request(render_approval(ticket))
         if any(results.values()):
             memory_bank.mark_notified(ticket["ticket_id"])
@@ -250,12 +261,23 @@ def notify_approval(ticket: Dict[str, Any]) -> Optional[threading.Thread]:
 
     # A copy: the ticket keeps being written to after this returns.
     snapshot = dict(ticket)
-    def deliver() -> None:
-        results = send_approval_request(snapshot)
-        if any(results.values()) and snapshot.get("ticket_id"):
-            from app.tools.memory_tools import memory_bank
+    ticket_id = snapshot.get("ticket_id")
 
-            memory_bank.mark_notified(snapshot["ticket_id"])
+    def deliver() -> None:
+        try:
+            results = send_approval_request(snapshot)
+            if any(results.values()) and ticket_id:
+                from app.tools.memory_tools import memory_bank
+
+                memory_bank.mark_notified(ticket_id)
+        finally:
+            # Released either way: a delivery that failed must be left for the
+            # next sweep to retry, not held out of it forever.
+            with _in_flight_lock:
+                _in_flight.discard(ticket_id)
+
+    with _in_flight_lock:
+        _in_flight.add(ticket_id)
 
     thread = threading.Thread(
         target=deliver,

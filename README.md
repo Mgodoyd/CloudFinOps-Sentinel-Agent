@@ -613,7 +613,7 @@ MOCK_MODE=true DASHBOARD_TOKEN=dev-token \
 
 Open <http://localhost:8080> and unlock it with `dev-token`. Press **RUN AUDIT**.
 
-Run the tests with `pytest` — **388 pass, 2 skip** (the two need the
+Run the tests with `pytest` — **390 pass, 2 skip** (the two need the
 OpenTelemetry exporter), no credentials needed.
 
 ### Point it at a real GCP project
@@ -668,6 +668,43 @@ The header switches to a red **LIVE WRITES** badge. In this mode
 `resize_cloud_run` performs a real read-modify-write on the service template
 (preserving image, env vars, scaling and concurrency) and deploys a new
 revision. Grant `roles/run.admin` first.
+
+## Running on Google Cloud
+
+Deployed, audited against a real project, and acting on it. Not a screenshot of
+a local run.
+
+![The deployed service](docs/img/deployed/01-live-service.png)
+
+`SOURCE GCP · MONITORING` and a red **LIVE WRITES** badge: real Cloud Run
+services, real Cloud Monitoring peaks, and `DRY_RUN=false`. The estate is the
+agent's own project — including the Sentinel service itself, which it audits
+like anything else. The approval card carries the exact shape the change will
+apply, `→ 1000m vCPU / 256Mi / min 0`, and the model's own diagnosis underneath.
+
+![Cloud Run console](docs/img/deployed/02-cloud-run-console.png)
+
+![Cloud Scheduler](docs/img/deployed/03-cloud-scheduler.png)
+
+The scheduler is what makes it autonomous rather than button-driven: hourly,
+into `/webhook/pubsub`, whether or not anyone is watching.
+
+![Firestore memory bank](docs/img/deployed/04-firestore-memory-bank.png)
+
+The Memory Bank in Firestore — `cloudfinops_sentinel/memory_bank`, holding
+approvals and events. Cloud Run's filesystem is ephemeral, so this document is
+the only reason a new revision still knows what the previous one remediated.
+
+![Cloud Trace spans](docs/img/deployed/05-cloud-trace-spans.png)
+
+OpenTelemetry spans in Cloud Trace: `agent.audit`, `agent.analyse`,
+`agent.plan`, with real durations across real runs.
+
+![Telegram approval](docs/img/deployed/06-telegram-approval.jpg)
+
+And the part that closes the loop — the approval leaves the dashboard and
+reaches a phone, carrying the money, the resource, the target shape and the
+reasoning.
 
 ## Deploying to Cloud Run
 
@@ -907,7 +944,7 @@ human-facing `verdict` is localised.
 pytest
 ```
 
-390 tests — 388 pass and 2 skip where the OpenTelemetry exporter is
+392 tests — 390 pass and 2 skip where the OpenTelemetry exporter is
 unavailable — covering the memory bank, cost math, the autonomy matrix, the DRY_RUN
 safety gate, tool serialization, LLM analysis and failure handling, model
 fallbacks, action dispatch per resource type, the real-data guarantees, the
@@ -955,7 +992,7 @@ app/
     static/js/i18n.js     UI string catalogue (en/es)
 deploy/                   One-command Cloud Run deploy + Cloud Scheduler
 docs/                     Architecture notes, diagrams and screenshots
-tests/                    390 tests, no credentials needed
+tests/                    392 tests, no credentials needed
 ```
 
 ## Known limitations

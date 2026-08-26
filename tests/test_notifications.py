@@ -66,6 +66,20 @@ def telegram(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "-100999")
 
 
+def drain_deliveries(timeout: float = 5.0) -> None:
+    """Wait for the fire-and-forget delivery threads to finish.
+
+    Creation notifies on its own thread. A test that wants to simulate "nobody
+    was reachable back then" has to let that thread finish first, or it is
+    really testing the in-flight guard instead.
+    """
+    import threading
+
+    for thread in threading.enumerate():
+        if thread.name.startswith("notify-"):
+            thread.join(timeout=timeout)
+
+
 # --- 1. silence is the default -------------------------------------------
 def test_nothing_is_sent_when_no_channel_is_configured(post):
     assert notifications.configured_channels() == []
@@ -288,6 +302,7 @@ def test_a_ticket_raised_before_a_channel_existed_is_announced_later(telegram, p
     silent forever, and every later audit skipped it as a duplicate.
     """
     r.request_human_approval("orphan-disk", "Delete disk", 60.0, target_memory="")
+    drain_deliveries()
     for ticket in memory_bank.data["approvals"]:
         ticket.pop("notified_at", None)  # as if nobody had been reachable
     post.calls.clear()
@@ -298,6 +313,7 @@ def test_a_ticket_raised_before_a_channel_existed_is_announced_later(telegram, p
 
 def test_an_announced_ticket_is_not_announced_again(telegram, post):
     r.request_human_approval("orphan-disk", "Delete disk", 60.0, target_memory="")
+    drain_deliveries()
     for ticket in memory_bank.data["approvals"]:
         ticket.pop("notified_at", None)
 
@@ -310,6 +326,7 @@ def test_a_failed_delivery_leaves_it_unannounced_for_next_time(monkeypatch, tele
     import httpx
 
     r.request_human_approval("orphan-disk", "Delete disk", 60.0, target_memory="")
+    drain_deliveries()
     for ticket in memory_bank.data["approvals"]:
         ticket.pop("notified_at", None)
 
@@ -320,6 +337,7 @@ def test_a_failed_delivery_leaves_it_unannounced_for_next_time(monkeypatch, tele
 
 def test_a_resolved_ticket_is_never_announced(telegram, post):
     r.request_human_approval("orphan-disk", "Delete disk", 60.0, target_memory="")
+    drain_deliveries()
     memory_bank.resolve_approval("orphan-disk", "REJECTED")
     post.calls.clear()
 
@@ -328,5 +346,57 @@ def test_a_resolved_ticket_is_never_announced(telegram, post):
 
 def test_announcing_is_skipped_when_no_channel_is_configured(post):
     r.request_human_approval("orphan-disk", "Delete disk", 60.0, target_memory="")
+    drain_deliveries()
     assert notifications.announce_pending() == 0
     assert not post.calls
+
+
+# --- 8. the same approval must not arrive twice ----------------------------
+def test_a_sweep_does_not_duplicate_a_delivery_already_running(telegram, post,
+                                                               monkeypatch):
+    """Seen in the field: two identical Telegram messages a minute apart.
+
+    A ticket is notified when it is raised, on its own thread, and
+    `announce_pending` sweeps up whatever nobody was told about. Between the
+    thread starting and it recording success there is a window where the sweep
+    reads the ticket as unannounced and sends it again.
+    """
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+    real_post = notifications._post
+
+    def slow_post(url, payload, channel):
+        started.set()
+        release.wait(timeout=5)  # hold the delivery open
+        return real_post(url, payload, channel)
+
+    monkeypatch.setattr(notifications, "_post", slow_post)
+
+    thread = notifications.notify_approval(
+        {**TICKET, "ticket_id": "tkt_race", "status": "PENDING"}
+    )
+    started.wait(timeout=5)
+
+    # The audit finishes while the delivery is still in flight.
+    memory_bank.add_approval({**TICKET, "ticket_id": "tkt_race", "status": "PENDING"})
+    assert notifications.announce_pending() == 0, (
+        "the sweep must skip a ticket whose own delivery is still running"
+    )
+
+    release.set()
+    thread.join(timeout=5)
+    assert len(post.calls) == 1
+
+
+def test_a_failed_delivery_is_released_for_the_next_sweep(telegram, monkeypatch):
+    """In-flight must not become a permanent hold: a delivery that failed is
+    exactly the one the sweep exists to retry."""
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", Recorder(raises=OSError("down")))
+    thread = notifications.notify_approval({**TICKET, "ticket_id": "tkt_fail"})
+    if thread:
+        thread.join(timeout=5)
+
+    assert "tkt_fail" not in notifications._in_flight
