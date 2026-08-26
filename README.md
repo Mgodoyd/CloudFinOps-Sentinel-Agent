@@ -11,6 +11,15 @@ Built on **Gemini 3.5 Flash-Lite** through the **GenAI SDK**, running on
 
 ![Command deck](docs/img/03-topology.png)
 
+> **All Things Agentic Hackathon** · track: **The Taskmaster**
+> An event-driven workflow with autonomous routing — it detects change, decides
+> what should happen next, acts across four Google Cloud APIs, and sends the
+> decision a human still owns to the chat that human actually reads.
+>
+> Gemini 3.5 Flash-Lite and Gemma 4 through the **GenAI SDK**, on **Cloud Run**
+> with **Firestore**, **Cloud Scheduler**, **Secret Manager**, **BigQuery** and
+> **Cloud Trace**.
+
 ---
 
 ## Contents
