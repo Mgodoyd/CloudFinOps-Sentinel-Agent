@@ -1,5 +1,14 @@
 # Architecture
 
+Two rendered diagrams, then the source Mermaid behind them.
+
+![System architecture](img/architecture.png)
+
+![Decision model](img/decision-model.png)
+
+The decision model — every threshold, formula and worked example — is documented
+in [the README](../README.md#the-decision-model).
+
 ## System
 
 ```mermaid
