@@ -30,6 +30,15 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Why the last read failed, kept so the readiness report can say something
+# actionable. Swallowing the exception and reporting "could not read" sends the
+# operator to check permissions that are already correct.
+_last_error: Optional[Exception] = None
+
+
+def last_error() -> Optional[Exception]:
+    return _last_error
+
 # One query per audit, over the last full month, grouped by service. The billing
 # export is partitioned on usage date and charged by bytes scanned, so the date
 # filter is what keeps this cheap rather than a nicety.
@@ -77,6 +86,9 @@ def fetch_billed_costs() -> Optional[Dict[str, Any]]:
     report a tenth of the real bill next to the estimate, which reads as the
     estimate being wildly wrong rather than the data being young.
     """
+    global _last_error
+    _last_error = None
+
     if not is_configured():
         return None
 
@@ -97,6 +109,7 @@ def fetch_billed_costs() -> Optional[Dict[str, Any]]:
             timeout=settings.BILLING_TIMEOUT
         )
     except Exception as exc:
+        _last_error = exc
         logger.warning(
             "Billing export unavailable (%s: %s); costs stay estimated",
             type(exc).__name__, str(exc)[:200],

@@ -366,15 +366,46 @@ def _billing_check() -> Dict[str, str]:
         return _check("Cost source", FAIL, str(exc)[:160])
 
     if billed is None:
-        return _check(
-            "Cost source", FAIL,
-            f"Could not read {settings.BILLING_EXPORT_TABLE}.",
-            "Grant roles/bigquery.jobUser and roles/bigquery.dataViewer, and check "
-            "the table name.",
-        )
+        exc = gcp_billing.last_error()
+        text = str(exc) if exc else ""
+
+        # The three ways this actually fails, each with a different fix. Naming
+        # them beats one generic line that sends the operator to re-grant roles
+        # that were already correct.
+        if "was not found in location" in text or "Not found: Dataset" in text:
+            detail = (
+                f"The dataset is not in the location the query ran in. {text[:160]}"
+            )
+            fix = ("The dataset's region is fixed at creation. Recreate it in the "
+                   "same region as the service, or set the job location to match.")
+        elif "has not been used in project" in text or "is disabled" in text:
+            detail = "The BigQuery API is not enabled on this project."
+            fix = (f"gcloud services enable bigquery.googleapis.com "
+                   f"--project={settings.PROJECT_ID}")
+        elif "403" in text or "Access Denied" in text or "PermissionDenied" in text:
+            detail = f"{_SA_EMAIL} cannot read the billing export."
+            fix = (f"gcloud projects add-iam-policy-binding {settings.PROJECT_ID} \\\n"
+                   f"  --member=serviceAccount:{_SA_EMAIL} "
+                   f"--role=roles/bigquery.jobUser\n"
+                   f"Then the same with --role=roles/bigquery.dataViewer.")
+        elif "Not found: Table" in text or "404" in text:
+            detail = f"No such table: {settings.BILLING_EXPORT_TABLE}"
+            fix = ("Check BILLING_EXPORT_TABLE. The export takes up to 24h to create "
+                   "it, and only the Detailed export has the columns this reads.")
+        else:
+            detail = (f"Could not read {settings.BILLING_EXPORT_TABLE}."
+                      + (f" {text[:160]}" if text else ""))
+            fix = "Grant roles/bigquery.jobUser and roles/bigquery.dataViewer."
+        return _check("Cost source", FAIL, detail, fix)
+
+    attributed = len(billed.get("costs") or {})
+    days = billed.get("days_covered") or 0
     return _check(
         "Cost source", OK,
-        f"Reconciled against the billing export: {len(billed)} attributed resource(s).",
+        f"Reconciled against the billing export: {attributed} attributed "
+        f"resource(s) over {days:.1f} day(s)."
+        + ("  The export has not produced rows yet — it takes up to 24h and does "
+           "not backfill." if not attributed else ""),
     )
 
 

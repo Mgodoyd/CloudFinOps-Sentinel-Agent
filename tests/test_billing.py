@@ -222,3 +222,40 @@ def test_the_evidence_row_says_when_the_data_is_partial():
     }
     labels = [row["label"] for row in explain(resource)["evidence"]]
     assert any("partial" in label for label in labels), labels
+
+
+# --- 6. a failure has to say which failure ---------------------------------
+@pytest.mark.parametrize("error,expected", [
+    ("404 Not found: Dataset p:billing_export was not found in location US",
+     "not in the location"),
+    ("403 BigQuery API has not been used in project 1 before or it is disabled",
+     "not enabled"),
+    ("403 Access Denied: Table p.d.t: User does not have permission",
+     "cannot read the billing export"),
+    ("404 Not found: Table p.d.t", "No such table"),
+])
+def test_each_failure_names_its_own_cause(monkeypatch, configured, error, expected):
+    """One generic 'could not read' sends the operator to re-grant roles that
+    were already correct. These are the three ways it actually fails, and each
+    has a different fix."""
+    use(monkeypatch, FakeBQ(error=RuntimeError(error)))
+
+    from app.tools.preflight import _billing_check
+
+    check = _billing_check()
+    assert check["status"] == "fail"
+    assert expected in check["detail"], check["detail"]
+    assert check["fix"]
+
+
+def test_an_empty_export_is_ok_and_says_it_is_still_filling(monkeypatch, configured):
+    """A table with no rows yet is a real answer, not a failure: the export
+    takes up to 24h and does not backfill."""
+    use(monkeypatch, FakeBQ(rows=[]))
+
+    from app.tools.preflight import _billing_check
+
+    check = _billing_check()
+    assert check["status"] == "ok"
+    assert "0 attributed" in check["detail"]
+    assert "24h" in check["detail"]
