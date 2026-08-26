@@ -112,9 +112,16 @@ def resize_cloud_run(
         return guard
 
     if estimated_savings >= settings.HIGH_RISK_ROI_THRESHOLD:
+        shape = {"memory": new_memory, "cpu": new_cpu,
+                 "min_instances": new_min_instances}
+        described = " / ".join(
+            [b for b in (f"{new_cpu} vCPU" if new_cpu else "", new_memory,
+                         f"min-instances {new_min_instances}"
+                         if new_min_instances is not None else "") if b]
+        )
         return request_human_approval(
             resource_id=service_id,
-            proposed_action=f"Resize memory to {new_memory}",
+            proposed_action=f"Resize to {described}",
             estimated_roi=estimated_savings,
             detailed_reason=(
                 f"Autonomy Level 2: a ${estimated_savings:.2f}/mo change on a production "
@@ -122,6 +129,11 @@ def resize_cloud_run(
             ),
             target_memory=new_memory,
             action_key="act.right_size",
+            # The CPU and min-instances parts of the change must survive onto
+            # the ticket: applying only the memory half of an approved resize
+            # books a saving that was never realised.
+            action_params={"cpu": new_cpu, "min_instances": new_min_instances},
+            target_shape=shape,
             change_specs=[{"kind": "memory", "from": "current", "to": new_memory}],
             reason_key="reason.autonomy2",
             reason_params={"savings": f"{estimated_savings:.2f}"},
@@ -215,7 +227,7 @@ def request_human_approval(
     resource_url: str = "",
     detailed_reason: str = "",
     severity: str = "HIGH",
-    target_memory: str = "512Mi",
+    target_memory: str = "",
     rationale: Optional[Dict[str, Any]] = None,
     action_key: str = "",
     change_specs: Optional[list] = None,
@@ -223,6 +235,7 @@ def request_human_approval(
     reason_params: Optional[Dict[str, Any]] = None,
     action_type: str = "resize_service",
     action_params: Optional[Dict[str, Any]] = None,
+    target_shape: Optional[Dict[str, Any]] = None,
     model_recommendation: str = "",
 ) -> str:
     """Open a human-in-the-loop approval ticket for a high-risk action.
@@ -235,6 +248,7 @@ def request_human_approval(
         detailed_reason: Why the change is being proposed, in one or two sentences.
         severity: LOW, MEDIUM or HIGH.
         target_memory: The concrete memory limit to apply on approval, e.g. "512Mi".
+            Empty means the ticket carries no shape and execution will refuse it.
 
     The ticket appears in the dashboard; nothing is executed until a human approves.
     """
@@ -274,6 +288,10 @@ def request_human_approval(
             # was resized as if it were a Cloud Run service.
             "action_type": action_type,
             "action_params": action_params or {},
+            # The complete shape the change will apply, resolved before the
+            # ticket was raised. Execution reads this and nothing else, so what
+            # runs on approval is exactly what was shown to the approver.
+            "target_shape": target_shape or {},
             # The model's own words. Kept verbatim: it is analysis, not a label,
             # and paraphrasing it into a catalogue string loses the reasoning.
             "model_recommendation": model_recommendation,
@@ -316,11 +334,20 @@ def execute_approved_action(resource_id: str) -> str:
     elif action_type == "delete_image":
         ok, message = gcp_actions.delete_untagged_image(params.get("full_name", resource_id))
     elif action_type == "resize_service":
+        shape = approval.get("target_shape") or {}
+        memory = shape.get("memory") or approval.get("target_memory")
+        if not memory:
+            message = (
+                f"REFUSED: the ticket for {resource_id} carries no target memory. "
+                "Applying a default would change the service in a way nobody approved."
+            )
+            tracer.step(EXECUTION, message, status=WARN, resource_id=resource_id)
+            return message
         ok, message = gcp_actions.resize_service(
             resource_id,
-            approval.get("target_memory") or "512Mi",
-            new_cpu=params.get("cpu", ""),
-            new_min_instances=params.get("min_instances"),
+            memory,
+            new_cpu=shape.get("cpu", params.get("cpu", "")),
+            new_min_instances=shape.get("min_instances", params.get("min_instances")),
         )
     else:
         message = f"REFUSED: unknown action type '{action_type}' for {resource_id}."
@@ -348,24 +375,6 @@ def execute_approved_action(resource_id: str) -> str:
         EXECUTION, f"Action complete on {resource_id}", status=OK, resource_id=resource_id,
         detail={"action_type": action_type, "outcome": message,
                 "booked_savings_monthly": approval["estimated_roi"],
-                "really_applied": settings.writes_enabled},
-    )
-    return message
-
-    memory_bank.log_remediation(
-        run_id=approval.get("run_id"),
-        event_id=f"approved_{approval.get('ticket_id', resource_id)}",
-        resource_id=resource_id,
-        action=approval["proposed_action"],
-        action_key=approval.get("action_key") or "",
-        savings=approval["estimated_roi"],
-        source="human-approved",
-        applied=settings.writes_enabled,
-        resource_state=_current_shape(resource_id),
-    )
-    tracer.step(
-        EXECUTION, f"Action complete on {resource_id}", status=OK, resource_id=resource_id,
-        detail={"outcome": message, "booked_savings_monthly": approval["estimated_roi"],
                 "really_applied": settings.writes_enabled},
     )
     return message

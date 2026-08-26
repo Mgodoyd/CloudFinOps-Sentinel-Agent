@@ -104,7 +104,14 @@ def test_a_high_value_recommendation_still_needs_a_human(monkeypatch):
     )
 
 
-def test_the_ticket_carries_the_models_words(monkeypatch):
+def test_the_ticket_headline_states_the_shape_that_will_be_applied(monkeypatch):
+    """The model narrates changes it does not encode.
+
+    Here it says "set min-instances to 0" in prose but returns no
+    `target_min_instances`, so nothing would set it. The headline must describe
+    the change that will actually run; the model's wording is kept alongside and
+    shown in the reasoning drawer, where it explains rather than promises.
+    """
     a = CloudFinOpsAgent()
     analysis = {
         "model": "m", "summary": "s",
@@ -124,9 +131,14 @@ def test_the_ticket_carries_the_models_words(monkeypatch):
         analysis,
     )
     ticket = memory_bank.pending_approvals()[0]
-    assert ticket["proposed_action"] == "Set min-instances to 0 and memory to 512Mi"
+    assert ticket["proposed_action"] == "Resize to 512Mi", (
+        "the headline is the contract; the prose promised a min-instances change "
+        "the model never encoded"
+    )
+    assert ticket["model_recommendation"] == "Set min-instances to 0 and memory to 512Mi"
     assert "bills 24/7" in ticket["detailed_reason"]
     assert ticket["target_memory"] == "512Mi"
+    assert ticket["target_shape"]["memory"] == "512Mi"
 
 
 def test_the_model_can_veto_an_action():

@@ -116,6 +116,67 @@ def render_changes(specs: List[Dict[str, Any]], lang: str = DEFAULT_LANG) -> Lis
     ]
 
 
+def merge_target_shape(
+    proposed: Optional[Dict[str, Any]] = None,
+    recommended: Optional[Dict[str, Any]] = None,
+    current: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Resolve the concrete shape a resize will apply.
+
+    A plan step or an LLM verdict usually names only the dimension it cared
+    about — a step meaning "scale to zero" carries `min_instances` and no
+    memory. Filling that gap with a constant applies a change nobody proposed
+    and no human approved, so what is missing comes from the deterministic
+    sizing for this resource and, failing that, from the shape it already has.
+
+    Returns None when no memory value can be established at all, which callers
+    must treat as "do not act" rather than "use a default".
+    """
+    sources = [s for s in (proposed, recommended, current) if s]
+
+    def pick(key: str) -> Any:
+        for source in sources:
+            # min_instances 0 is a real value — and the most valuable change
+            # the agent makes — so test for absence, not for truthiness.
+            if source.get(key) not in (None, ""):
+                return source[key]
+        return None
+
+    memory = pick("memory")
+    if not memory:
+        return None
+
+    cpu = str(pick("cpu") or "")
+    # Cloud Run refuses >=4Gi under 1 vCPU and >=8Gi under 2. The model states a
+    # shape in prose and encodes a different one often enough that this has to
+    # be checked: an invalid pair is rejected at deploy time, which reads to the
+    # operator as the agent being broken rather than the plan being wrong.
+    if cpu:
+        from app.tools.gcp_metrics import parse_cpu, parse_memory_gib
+
+        floor = _min_cpu_for_memory(int(parse_memory_gib(str(memory)) * 1024))
+        if parse_cpu(cpu) < floor:
+            cpu = _fmt_cpu(floor)
+
+    min_instances = pick("min_instances")
+    return {
+        "memory": str(memory),
+        "cpu": cpu,
+        "min_instances": int(min_instances) if min_instances is not None else None,
+    }
+
+
+def describe_shape(shape: Dict[str, Any]) -> str:
+    """A target shape as text, for a ticket a human has to read and approve."""
+    bits = []
+    if shape.get("cpu"):
+        bits.append(f"{shape['cpu']} vCPU")
+    bits.append(shape["memory"])
+    if shape.get("min_instances") is not None:
+        bits.append(f"min-instances {shape['min_instances']}")
+    return " / ".join(bits)
+
+
 def gcloud_command(resource: Dict[str, Any], target: Dict[str, Any]) -> str:
     """The exact command an operator could run to apply the same change."""
     parts = [

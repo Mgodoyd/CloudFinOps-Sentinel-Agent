@@ -879,3 +879,14 @@ body {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
+
+/* The exact shape an approval will apply — the contract behind the headline. */
+.approval .meta .shape {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--green);
+  border: 1px solid rgba(47, 252, 170, 0.35);
+  border-radius: 3px;
+  padding: 1px 6px;
+  letter-spacing: 0.04em;
+}

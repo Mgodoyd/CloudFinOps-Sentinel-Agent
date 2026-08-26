@@ -395,6 +395,25 @@ def build_history(lang: str = DEFAULT_LANG, limit: int = 20) -> List[Dict[str, A
     return list(reversed(history))[:limit]
 
 
+def _with_shape(out: Dict[str, Any], ticket: Dict[str, Any]) -> Dict[str, Any]:
+    """Append the target shape to whatever headline a branch produced.
+
+    Every branch below renders prose — the model's wording, or a catalogue
+    label translated into the reader's language. None of it is the contract.
+    The shape is, and it is deliberately left untranslated for the same reason
+    a `gcloud` command is: it is a technical value, not a sentence.
+    """
+    from app.tools.rationale import describe_shape
+
+    shape = ticket.get("target_shape")
+    if not shape or not shape.get("memory"):
+        return out
+    suffix = describe_shape(shape)
+    if suffix not in out.get("proposed_action", ""):
+        out["proposed_action"] = f"{out.get('proposed_action', '')} → {suffix}".strip()
+    return out
+
+
 def render_approval(ticket: Dict[str, Any], lang: str = DEFAULT_LANG) -> Dict[str, Any]:
     """Return a copy of an approval ticket rendered in the requested language.
 
@@ -402,18 +421,21 @@ def render_approval(ticket: Dict[str, Any], lang: str = DEFAULT_LANG) -> Dict[st
     plus structured data rather than as a finished sentence.
     """
     # The model's recommendation outranks a catalogue label: it explains the
-    # specific change, which a generic phrase cannot.
-    if ticket.get("model_recommendation"):
+    # specific change, which a generic phrase cannot. It must never outrank a
+    # shape-derived headline, though — the model narrates changes it did not
+    # encode ("keep 512Mi" beside a target of 256Mi), and the approver has to
+    # read what will actually be applied, not what the model meant to say.
+    if ticket.get("model_recommendation") and not ticket.get("target_shape"):
         out = dict(ticket)
         out["proposed_action"] = ticket["model_recommendation"]
         if ticket.get("reason_key"):
             out["detailed_reason"] = t(
                 lang, ticket["reason_key"], **(ticket.get("reason_params") or {})
             )
-        return out
+        return _with_shape(out, ticket)
 
     if not ticket.get("action_key"):
-        return ticket  # legacy ticket; show it as written
+        return _with_shape(dict(ticket), ticket)  # legacy ticket, shown as written
 
     from app.tools.rationale import render_changes
 
@@ -428,7 +450,7 @@ def render_approval(ticket: Dict[str, Any], lang: str = DEFAULT_LANG) -> Dict[st
 
     if ticket.get("reason_key"):
         out["detailed_reason"] = t(lang, ticket["reason_key"], **(ticket.get("reason_params") or {}))
-    return out
+    return _with_shape(out, ticket)
 
 
 memory_bank = MemoryBank()

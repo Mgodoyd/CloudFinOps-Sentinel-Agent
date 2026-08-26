@@ -783,7 +783,20 @@
       return;
     }
 
-    host.innerHTML = pending
+    // Spell out the shape that approving this ticket applies. The headline is
+  // prose; this is the contract, and it is what execution reads.
+  const shapeChip = (shape) => {
+    if (!shape || !shape.memory) return "";
+    const bits = [];
+    if (shape.cpu) bits.push(`${shape.cpu} vCPU`);
+    bits.push(shape.memory);
+    if (shape.min_instances !== null && shape.min_instances !== undefined) {
+      bits.push(`min ${shape.min_instances}`);
+    }
+    return `<span class="shape">→ ${esc(bits.join(" / "))}</span>`;
+  };
+
+  host.innerHTML = pending
       .map(
         (a) => `
       <div class="approval ${a.severity === "HIGH" ? "high" : ""}">
@@ -793,6 +806,7 @@
             <span>${esc(a.resource_id)}</span>
             <span class="roi">+$${money(a.estimated_roi)}/mo</span>
             <span>${esc(a.severity || "HIGH")}</span>
+            ${shapeChip(a.target_shape)}
             <a class="link-out" href="${esc(a.resource_url)}" target="_blank" rel="noopener">GCP CONSOLE ↗</a>
           </div>
           <div class="why">${esc(a.detailed_reason)}</div>

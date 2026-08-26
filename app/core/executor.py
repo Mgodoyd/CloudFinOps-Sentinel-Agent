@@ -19,6 +19,7 @@ from app.tools.gcp_remediator import (
     request_human_approval,
     resize_cloud_run,
 )
+from app.tools import rationale
 from app.tools.memory_tools import memory_bank
 
 logger = logging.getLogger(__name__)
@@ -30,9 +31,53 @@ IRREVERSIBLE = {"delete_disk", "release_address", "delete_image"}
 class PlanExecutor:
     """Executes one plan and reports what happened to each step."""
 
-    def __init__(self, analysis: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        analysis: Optional[Dict[str, Any]] = None,
+        fleet: Optional[List[Dict[str, Any]]] = None,
+    ):
         self.analysis = (analysis or {}).get("by_resource", {})
+        # The measured estate, keyed by id. The plan says what to do; these are
+        # the facts that decide whether it may run and what shape it applies.
+        self.fleet = {r["resource_id"]: r for r in (fleet or []) if r.get("resource_id")}
         self.results: List[Dict[str, Any]] = []
+
+    # ------------------------------------------------------------------
+    def _saving(self, rid: str, step: Dict[str, Any]) -> float:
+        """The recoverable saving this step is worth.
+
+        The measured figure wins. The model's `estimated_saving` is a guess and
+        must not be what the autonomy thresholds are tested against, nor what
+        the dashboard books as realised — it is used only for a resource the
+        scan did not return.
+        """
+        measured = self.fleet.get(rid)
+        if measured is not None and measured.get("wasted_cost") is not None:
+            return float(measured["wasted_cost"])
+        return float(step.get("estimated_saving") or 0.0)
+
+    def _target_shape(self, rid: str, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """The concrete shape this step will apply, resolved from measurements.
+
+        See `rationale.merge_target_shape`: what the plan left out is filled
+        from the deterministic sizing, never from a constant.
+        """
+        resource = self.fleet.get(rid)
+        recommended: Dict[str, Any] = {}
+        current: Dict[str, Any] = {}
+
+        if resource is not None and resource.get("type", "Cloud Run") == "Cloud Run":
+            current = {
+                "memory": resource.get("memory_limit"),
+                "cpu": resource.get("cpu_limit"),
+                "min_instances": resource.get("min_instances"),
+            }
+            try:
+                recommended = rationale.recommend_sizing(resource)["target"]
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("No sizing for %s (%s); keeping its current shape", rid, exc)
+
+        return rationale.merge_target_shape(args, recommended, current)
 
     # ------------------------------------------------------------------
     def run(self, plan: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
@@ -63,7 +108,7 @@ class PlanExecutor:
         rid = step["resource_id"]
         tool = step["tool"]
         args = step.get("args") or {}
-        saving = float(step.get("estimated_saving") or 0.0)
+        saving = self._saving(rid, step)
 
         def result(status: str, message: str) -> Dict[str, Any]:
             tracer.step(
@@ -104,15 +149,24 @@ class PlanExecutor:
         recommendation = verdict.get("recommendation") or step.get("intent", "")
         reason = verdict.get("diagnosis") or step.get("intent", "")
 
+        # Resolved once, so the ticket a human reads and the call the agent
+        # makes on approval are built from the same shape.
+        shape = self._target_shape(rid, args) if tool == "resize_service" else None
+        if tool == "resize_service" and shape is None:
+            return result(
+                "skipped",
+                f"No target shape could be established for {rid} — nothing was applied.",
+            )
+
         if needs_human:
-            message = self._escalate(rid, tool, args, saving, recommendation, reason)
+            message = self._escalate(rid, tool, args, saving, recommendation, reason, shape)
             status = "awaiting_approval" if message.startswith("PENDING") else "skipped"
             return result(status, message)
 
-        return self._execute_now(step, result, rid, tool, args, saving)
+        return self._execute_now(step, result, rid, tool, args, saving, shape)
 
     # ------------------------------------------------------------------
-    def _escalate(self, rid, tool, args, saving, recommendation, reason) -> str:
+    def _escalate(self, rid, tool, args, saving, recommendation, reason, shape=None) -> str:
         if tool == "delete_disk":
             return delete_orphan_disk(rid, estimated_savings=saving, zone=args.get("zone", ""))
 
@@ -121,30 +175,41 @@ class PlanExecutor:
             "delete_image": "act.purge_image",
         }.get(tool, "act.right_size")
 
-        shape = {k: v for k, v in args.items()
-                 if k in ("cpu", "min_instances", "zone", "region", "full_name")}
+        if tool == "resize_service" and shape:
+            # State the shape in the ticket itself. A human approving
+            # "downsize to 2Gi" must not have 512Mi applied on their behalf,
+            # so the text and the stored parameters come from one source.
+            proposed = f"Resize to {rationale.describe_shape(shape)}"
+            params = {"cpu": shape["cpu"], "min_instances": shape["min_instances"]}
+            target_memory = shape["memory"]
+        else:
+            proposed = recommendation or f"{tool} on {rid}"
+            params = {k: v for k, v in args.items()
+                      if k in ("cpu", "min_instances", "zone", "region", "full_name")}
+            target_memory = args.get("memory", "")
 
         return request_human_approval(
             resource_id=rid,
-            proposed_action=recommendation or f"{tool} on {rid}",
+            proposed_action=proposed,
             estimated_roi=saving,
             detailed_reason=reason,
             severity="HIGH" if saving >= settings.HIGH_RISK_ROI_THRESHOLD else "MEDIUM",
-            target_memory=args.get("memory", "512Mi"),
+            target_memory=target_memory,
             action_key=action_key,
             action_type={"release_address": "release_address",
                          "delete_image": "delete_image"}.get(tool, "resize_service"),
-            action_params=shape,
+            action_params=params,
+            target_shape=shape,
             model_recommendation=recommendation,
             reason_key="reason.irreversible" if tool in IRREVERSIBLE else "",
         )
 
-    def _execute_now(self, step, result, rid, tool, args, saving) -> Dict[str, Any]:
+    def _execute_now(self, step, result, rid, tool, args, saving, shape=None) -> Dict[str, Any]:
         """Level 1: the agent applies it directly."""
         if tool == "resize_service":
             message = resize_cloud_run(
-                rid, args.get("memory", "512Mi"), estimated_savings=saving,
-                new_cpu=args.get("cpu", ""), new_min_instances=args.get("min_instances"),
+                rid, shape["memory"], estimated_savings=saving,
+                new_cpu=shape["cpu"], new_min_instances=shape["min_instances"],
             )
         elif tool == "delete_image":
             message = purge_untagged_image(args.get("full_name", rid), estimated_savings=saving)

@@ -17,6 +17,7 @@ from app.core.analyst import FleetAnalyst, clear_analysis, last_analysis, store_
 from app.core.executor import PlanExecutor
 from app.core.planner import MAX_REPLANS, Planner
 from app.core.prompts import AUDIT_PROMPT_TEMPLATE, SYSTEM_INSTRUCTION
+from app.tools import rationale
 from app.tools.gcp_metrics import describe_resources, get_infrastructure_anomalies
 from app.tools.gcp_remediator import (
     delete_orphan_disk,
@@ -95,6 +96,32 @@ def _outage_hint(exc: Exception) -> str:
         f"{cause}; the audit completed using the deterministic heuristic instead. "
         "Findings and the autonomy matrix are unaffected — only the natural-language "
         "reasoning was skipped. Re-run to get the model's analysis."
+    )
+
+
+def _shape_for(resource: Dict[str, Any], verdict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The shape a ticket for this resource should carry.
+
+    The model's targets first, then the deterministic sizing, then the shape
+    the resource already has — see `rationale.merge_target_shape`.
+    """
+    recommended: Dict[str, Any] = {}
+    try:
+        recommended = rationale.recommend_sizing(resource)["target"]
+    except (KeyError, TypeError, ValueError):
+        pass
+    return rationale.merge_target_shape(
+        {
+            "memory": (verdict or {}).get("target_memory"),
+            "cpu": (verdict or {}).get("target_cpu"),
+            "min_instances": (verdict or {}).get("target_min_instances"),
+        },
+        recommended,
+        {
+            "memory": resource.get("memory_limit"),
+            "cpu": resource.get("cpu_limit"),
+            "min_instances": resource.get("min_instances"),
+        },
     )
 
 
@@ -258,23 +285,35 @@ class CloudFinOpsAgent:
                 "delete_image": "act.purge_image",
             }.get(action_type, "act.right_size")
 
+            # A shape may not be resolvable for a malformed record. The ticket
+            # is still raised — an open anomaly with no ticket is a dead end for
+            # the operator — and execution refuses it rather than guessing.
+            shape = _shape_for(res, verdict) if action_type == "resize_service" else None
+            if action_type == "resize_service" and shape is None:
+                logger.warning("No target shape for %s; ticket needs manual action", rid)
+
             request_human_approval(
                 resource_id=rid,
-                proposed_action=verdict.get("recommendation")
-                or f"Resolve {res['status'].lower()} {kind.lower()}",
+                proposed_action=(
+                    f"Resize to {rationale.describe_shape(shape)}" if shape
+                    else verdict.get("recommendation")
+                    or f"Resolve {res['status'].lower()} {kind.lower()}"
+                ),
                 estimated_roi=res["wasted_cost"],
                 resource_url=res.get("url", ""),
                 detailed_reason=verdict.get("diagnosis")
                 or f"{res['status']}: ${res['wasted_cost']:.2f}/mo recoverable.",
                 severity=res.get("severity", "MEDIUM"),
-                target_memory=verdict.get("target_memory") or "512Mi",
+                target_memory=(shape or {}).get("memory", ""),
                 action_key=action_key,
                 action_type=action_type,
                 action_params={k: v for k, v in {
                     "zone": res.get("zone") or res.get("location"),
                     "region": res.get("region"),
-                    "min_instances": verdict.get("target_min_instances"),
+                    "cpu": (shape or {}).get("cpu"),
+                    "min_instances": (shape or {}).get("min_instances"),
                 }.items() if v is not None},
+                target_shape=shape,
                 model_recommendation=verdict.get("recommendation", ""),
             )
             raised += 1
@@ -314,7 +353,7 @@ class CloudFinOpsAgent:
                         status="warn")
             return None
 
-        executor = PlanExecutor(analysis)
+        executor = PlanExecutor(analysis, fleet)
         results, failures = executor.run(plan)
         replans = 0
 
@@ -355,8 +394,10 @@ class CloudFinOpsAgent:
                 lines.append(f"- `{rid}` — already remediated in an earlier scan.")
                 continue
 
-            savings = float((verdict or {}).get("monthly_saving")
-                            or anomaly.get("potential_savings", 0.0))
+            # The cost model measured this; the model's `monthly_saving` is a
+            # guess and only stands in when there is no measurement.
+            savings = float(anomaly.get("potential_savings")
+                            or (verdict or {}).get("monthly_saving") or 0.0)
             result = self._dispatch(rid, anomaly, verdict, savings)
             lines.append(result)
             acted += 1
@@ -408,20 +449,27 @@ class CloudFinOpsAgent:
         recommendation = (verdict or {}).get("recommendation") or (
             "Right-size allocation to match observed usage"
         )
-        target_memory = (verdict or {}).get("target_memory") or "512Mi"
-        # The model's target shape, in full. Applying only part of it would
-        # book savings the change never delivers.
-        target_shape = {
-            k: v for k, v in {
+        # The model names only what it cared about; the rest is resolved from
+        # the deterministic sizing rather than from a constant.
+        sizing = (anomaly.get("rationale") or {}).get("sizing") or {}
+        shape = rationale.merge_target_shape(
+            {
+                "memory": (verdict or {}).get("target_memory"),
                 "cpu": (verdict or {}).get("target_cpu"),
                 "min_instances": (verdict or {}).get("target_min_instances"),
-            }.items() if v is not None
-        }
+            },
+            sizing.get("target"),
+            sizing.get("current"),
+        )
+        target_memory = (shape or {}).get("memory", "")
 
         if savings >= settings.HIGH_RISK_ROI_THRESHOLD or anomaly["severity"] == "HIGH":
             result = request_human_approval(
                 resource_id=rid,
-                proposed_action=recommendation,
+                proposed_action=(
+                    f"Resize to {rationale.describe_shape(shape)}" if shape
+                    else recommendation
+                ),
                 estimated_roi=savings,
                 resource_url=anomaly.get("resource_url", ""),
                 detailed_reason=reason,
@@ -429,7 +477,11 @@ class CloudFinOpsAgent:
                 target_memory=target_memory,
                 action_key="act.right_size",
                 action_type="resize_service",
-                action_params=target_shape,
+                action_params={k: v for k, v in {
+                    "cpu": (shape or {}).get("cpu"),
+                    "min_instances": (shape or {}).get("min_instances"),
+                }.items() if v is not None},
+                target_shape=shape,
                 model_recommendation=(verdict or {}).get("recommendation", ""),
                 rationale=anomaly.get("rationale"),
             )
@@ -439,10 +491,16 @@ class CloudFinOpsAgent:
                 return f"- `{rid}` — {result[9:]}"
             return f"- `{rid}` — escalated for approval (${savings:.2f}/mo): {recommendation}"
 
-        result = resize_cloud_run(rid, target_memory, estimated_savings=savings)
+        if shape is None:
+            return f"- `{rid}` — no target shape could be established; nothing applied."
+        result = resize_cloud_run(
+            rid, shape["memory"], estimated_savings=savings,
+            new_cpu=shape["cpu"], new_min_instances=shape["min_instances"],
+        )
         if result.startswith(("SKIPPED", "FAILED")):
             return f"- `{rid}` — {result}"
-        return f"- `{rid}` — resized to {target_memory} (${savings:.2f}/mo)."
+        return (f"- `{rid}` — resized to {rationale.describe_shape(shape)} "
+                f"(${savings:.2f}/mo).")
 
     def _heuristic_audit(self, data: Dict[str, Any], reason: str = "") -> str:
         """Deterministic fallback that still applies the full autonomy matrix.
@@ -462,20 +520,27 @@ class CloudFinOpsAgent:
             if memory_bank.check_history(rid).get("found"):
                 lines.append(f"- `{rid}` — skipped, already remediated.")
                 continue
+            why = anomaly.get("rationale") or {}
+            sizing = why.get("sizing") or {}
+            rule = why.get("rule") or {}
+            llm = last_analysis()["by_resource"].get(rid) or {}
+            shape = rationale.merge_target_shape(
+                {
+                    "memory": llm.get("target_memory"),
+                    "cpu": llm.get("target_cpu"),
+                    "min_instances": llm.get("target_min_instances"),
+                },
+                sizing.get("target"),
+                sizing.get("current"),
+            )
+            if shape is None:
+                lines.append(f"- `{rid}` — no target shape could be established; skipped.")
+                continue
+
             if savings >= settings.HIGH_RISK_ROI_THRESHOLD or anomaly["severity"] == "HIGH":
-                why = anomaly.get("rationale") or {}
-                sizing = why.get("sizing") or {}
-                rule = why.get("rule") or {}
-                llm = last_analysis()["by_resource"].get(rid) or {}
-                # Prefer the model's target shape; fall back to the computed one.
-                target_memory = llm.get("target_memory") or sizing.get("target", {}).get(
-                    "memory", "512Mi"
-                )
                 request_human_approval(
                     resource_id=rid,
-                    proposed_action=llm.get("recommendation")
-                    or why.get("solution")
-                    or "Right-size allocation to match observed usage",
+                    proposed_action=f"Resize to {rationale.describe_shape(shape)}",
                     action_key="act.right_size",
                     change_specs=sizing.get("change_specs") or [],
                     reason_key=f"{rule['key']}.why" if rule.get("key") else "",
@@ -484,13 +549,21 @@ class CloudFinOpsAgent:
                     resource_url=anomaly.get("resource_url", ""),
                     detailed_reason=anomaly.get("issue", ""),
                     severity=anomaly.get("severity", "HIGH"),
-                    target_memory=target_memory,
+                    target_memory=shape["memory"],
+                    action_params={"cpu": shape["cpu"],
+                                   "min_instances": shape["min_instances"]},
+                    target_shape=shape,
+                    model_recommendation=llm.get("recommendation", ""),
                     rationale=why,
                 )
                 lines.append(f"- `{rid}` — escalated for approval (${savings:.2f}/mo).")
             else:
-                resize_cloud_run(rid, "512Mi", estimated_savings=savings)
-                lines.append(f"- `{rid}` — resized to 512Mi (${savings:.2f}/mo).")
+                resize_cloud_run(
+                    rid, shape["memory"], estimated_savings=savings,
+                    new_cpu=shape["cpu"], new_min_instances=shape["min_instances"],
+                )
+                lines.append(f"- `{rid}` — resized to "
+                             f"{rationale.describe_shape(shape)} (${savings:.2f}/mo).")
             total += savings
 
         for image in data.get("untagged_images", []):

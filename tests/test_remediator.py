@@ -52,7 +52,8 @@ def test_duplicate_approval_tickets_are_suppressed():
 
 
 def test_execute_approved_action_logs_savings():
-    r.request_human_approval("svc-y", "Resize to 512Mi", 42.0)
+    # target_memory is what execution applies; a ticket without one is refused.
+    r.request_human_approval("svc-y", "Resize to 512Mi", 42.0, target_memory="512Mi")
     memory_bank.resolve_approval("svc-y", "APPROVED")
     result = r.execute_approved_action("svc-y")
     assert not result.startswith(("FAILED", "No approved action"))
