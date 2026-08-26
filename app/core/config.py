@@ -83,7 +83,11 @@ class Settings(BaseSettings):
     # Two ways to reach Gemini:
     #   1. GEMINI_API_KEY  -> Google AI Studio (simplest)
     #   2. USE_VERTEX=true -> Vertex AI using the service account (no key)
-    GEMINI_API_KEY: str = "AQ.Ab8RN6Kl2HbVR69dL96cgO0hk5T2OiizsQz0J0s2oxJK6VYldw"
+    # Empty on purpose, and it must stay empty. A default here is a credential
+    # committed to the repository: it ships to every clone and every fork, and
+    # it survives in the history long after it is taken out of the file. Empty
+    # degrades to heuristic mode, which is loud and harmless.
+    GEMINI_API_KEY: str = ""
     USE_VERTEX: bool = False
     # gemini-2.5-flash was retired for new API keys and 404s for them, so the
     # default is the current Flash generation. Override if you have access to
