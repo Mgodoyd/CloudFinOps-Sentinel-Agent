@@ -35,7 +35,8 @@ for ROLE in \
   roles/datastore.user \
   roles/cloudtrace.agent \
   roles/logging.logWriter \
-  roles/aiplatform.user
+  roles/aiplatform.user \
+  roles/bigquery.jobUser roles/bigquery.dataViewer
 do
   gcloud projects add-iam-policy-binding "$PROJECT" \
     --member="serviceAccount:${SA}" --role="$ROLE" --condition=None --quiet >/dev/null
@@ -68,6 +69,45 @@ gcloud secrets add-iam-policy-binding gemini-api-key \
   --member="serviceAccount:${SA}" --role=roles/secretmanager.secretAccessor \
   --project="$PROJECT" --quiet >/dev/null
 
+# --- Optional channels and cost source -------------------------------------
+# Read from the environment or a local .env, so the values that already work on
+# a laptop reach Cloud Run instead of being retyped. Anything unset is simply
+# not passed: every one of these degrades to "that feature is off".
+if [ -f .env ]; then
+  set -a; . ./.env; set +a
+fi
+
+OPTIONAL_ENV=""
+add_env() {  # name value
+  [ -n "$2" ] || return 0
+  OPTIONAL_ENV="${OPTIONAL_ENV},$1=$2"
+  echo "   $1 will be set"
+}
+
+OPTIONAL_SECRETS=""
+add_secret() {  # secret-name env-name value
+  [ -n "$3" ] || return 0
+  printf '%s' "$3" | gcloud secrets create "$1" --data-file=- --project="$PROJECT" \
+    2>/dev/null || printf '%s' "$3" | gcloud secrets versions add "$1" \
+    --data-file=- --project="$PROJECT" >/dev/null
+  gcloud secrets add-iam-policy-binding "$1" \
+    --member="serviceAccount:${SA}" --role=roles/secretmanager.secretAccessor \
+    --project="$PROJECT" --quiet >/dev/null
+  OPTIONAL_SECRETS="${OPTIONAL_SECRETS},$2=$1:latest"
+  echo "   $2 stored in Secret Manager"
+}
+
+echo "▸ Optional configuration"
+add_env GEMMA_MODEL "${GEMMA_MODEL:-}"
+add_env TELEGRAM_CHAT_ID "${TELEGRAM_CHAT_ID:-}"
+add_env BILLING_EXPORT_TABLE "${BILLING_EXPORT_TABLE:-}"
+# A bot token and a Slack webhook URL are credentials - the webhook URL is a
+# bearer token that happens to look like a link - so they go to Secret Manager
+# rather than into the service's environment, where the console shows them.
+add_secret sentinel-telegram-token TELEGRAM_BOT_TOKEN "${TELEGRAM_BOT_TOKEN:-}"
+add_secret sentinel-slack-webhook SLACK_WEBHOOK_URL "${SLACK_WEBHOOK_URL:-}"
+[ -n "$OPTIONAL_ENV$OPTIONAL_SECRETS" ] || echo "   none set; notifications and billing stay off"
+
 echo "▸ Building and deploying"
 gcloud run deploy "$SERVICE" \
   --source . \
@@ -78,12 +118,20 @@ gcloud run deploy "$SERVICE" \
   --memory=1Gi --cpu=1 \
   --min-instances=0 --max-instances=3 \
   --timeout=600 \
-  --set-env-vars="PROJECT_ID=${PROJECT},REGION=${REGION},STATE_BACKEND=firestore,MOCK_MODE=false,DRY_RUN=true,GEMINI_MODEL=gemini-3.5-flash-lite" \
-  --set-secrets="GEMINI_API_KEY=gemini-api-key:latest,DASHBOARD_TOKEN=sentinel-dashboard-token:latest"
+  --set-env-vars="PROJECT_ID=${PROJECT},REGION=${REGION},STATE_BACKEND=firestore,MOCK_MODE=false,DRY_RUN=true,GEMINI_MODEL=gemini-3.5-flash-lite${OPTIONAL_ENV}" \
+  --set-secrets="GEMINI_API_KEY=gemini-api-key:latest,DASHBOARD_TOKEN=sentinel-dashboard-token:latest${OPTIONAL_SECRETS}"
 
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" \
         --project="$PROJECT" --format='value(status.url)')"
 echo "▸ Deployed: $URL"
+
+# A notification links back to the deck, and the deck's URL only exists once
+# Cloud Run has assigned one — so this is a second, cheap revision rather than
+# a value the operator has to know in advance.
+echo "▸ Dashboard URL for notification links"
+gcloud run services update "$SERVICE" --region="$REGION" --project="$PROJECT" \
+  --update-env-vars="DASHBOARD_URL=${URL}" --quiet >/dev/null
+echo "   DASHBOARD_URL=${URL}"
 
 echo "▸ Cloud Scheduler — hourly audits"
 gcloud scheduler jobs delete sentinel-hourly --location="$REGION" \
@@ -104,6 +152,9 @@ echo "✓ Done."
 echo "  Dashboard : $URL"
 echo "  Preflight : ${URL}/api/preflight"
 echo "  Schedule  : hourly, on the hour"
+echo
+echo "  Check what is on:  curl -H \"Authorization: Bearer <token>\" ${URL}/api/preflight"
+echo "  It reports the cost source and which notification channels are live."
 echo
 echo "  DRY_RUN is ON. To let the agent apply changes for real:"
 echo "    gcloud run services update $SERVICE --region=$REGION \\"
