@@ -209,6 +209,32 @@ def send_approval_request(ticket: Dict[str, Any]) -> Dict[str, bool]:
     return results
 
 
+def announce_pending(limit: int = 10) -> int:
+    """Tell someone about pending tickets nobody has heard about yet.
+
+    Creation is the normal moment to notify, but it is guarded against
+    duplicates: a resource that already has a ticket never reaches that code
+    again. So a ticket raised before a channel was configured — or one whose
+    delivery failed — would stay pending and silent forever. Running this at the
+    end of an audit closes that hole without re-announcing anything already
+    delivered.
+
+    Returns how many were announced.
+    """
+    if not configured_channels():
+        return 0
+
+    from app.tools.memory_tools import memory_bank, render_approval
+
+    announced = 0
+    for ticket in memory_bank.unannounced_approvals()[:limit]:
+        results = send_approval_request(render_approval(ticket))
+        if any(results.values()):
+            memory_bank.mark_notified(ticket["ticket_id"])
+            announced += 1
+    return announced
+
+
 def notify_approval(ticket: Dict[str, Any]) -> Optional[threading.Thread]:
     """Fire-and-forget delivery, off the caller's thread.
 
@@ -224,9 +250,15 @@ def notify_approval(ticket: Dict[str, Any]) -> Optional[threading.Thread]:
 
     # A copy: the ticket keeps being written to after this returns.
     snapshot = dict(ticket)
+    def deliver() -> None:
+        results = send_approval_request(snapshot)
+        if any(results.values()) and snapshot.get("ticket_id"):
+            from app.tools.memory_tools import memory_bank
+
+            memory_bank.mark_notified(snapshot["ticket_id"])
+
     thread = threading.Thread(
-        target=send_approval_request,
-        args=(snapshot,),
+        target=deliver,
         name=f"notify-{snapshot.get('resource_id', 'ticket')}",
         daemon=True,
     )

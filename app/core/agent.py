@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 from app.core import telemetry
-from app.core.trace import ANALYSIS, DECISION, PLANNING, tracer
+from app.core.trace import ANALYSIS, APPROVAL, DECISION, PLANNING, tracer
 from app.core.analyst import (
     FleetAnalyst,
     clear_analysis,
@@ -848,6 +848,22 @@ class CloudFinOpsAgent:
 
             # Structural guarantee, independent of what the plan chose to do.
             self._reconcile_open_anomalies(analysis)
+
+            # Anything still waiting that nobody has been told about. Creation
+            # is guarded against duplicates, so a ticket raised before a channel
+            # was configured would otherwise stay pending and silent forever.
+            try:
+                from app.tools import notifications
+
+                announced = notifications.announce_pending()
+                if announced:
+                    tracer.step(
+                        APPROVAL,
+                        f"{announced} pending ticket(s) had never been announced — sent now",
+                        detail={"count": announced},
+                    )
+            except Exception as exc:
+                logger.warning("Could not announce pending approvals: %s", exc)
 
             snapshot = memory_bank.snapshot()
             actions = len(snapshot["remediations"]) + len(snapshot["approvals"]) - actions_before

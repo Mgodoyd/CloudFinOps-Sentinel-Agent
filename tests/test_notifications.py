@@ -276,3 +276,57 @@ def test_the_bot_token_never_reaches_the_logs(telegram, post, caplog):
 
     assert "12345:AAtoken" not in caplog.text
     assert logging.getLogger("httpx").level >= logging.WARNING
+
+
+# --- 7. a pending ticket nobody heard about ---------------------------------
+def test_a_ticket_raised_before_a_channel_existed_is_announced_later(telegram, post):
+    """The gap that made this look broken in the field.
+
+    Creation is the normal moment to notify, but it is guarded against
+    duplicates — a resource that already has a ticket never reaches that code
+    again. So a ticket raised before Telegram was configured stayed pending and
+    silent forever, and every later audit skipped it as a duplicate.
+    """
+    r.request_human_approval("orphan-disk", "Delete disk", 60.0, target_memory="")
+    for ticket in memory_bank.data["approvals"]:
+        ticket.pop("notified_at", None)  # as if nobody had been reachable
+    post.calls.clear()
+
+    assert notifications.announce_pending() == 1
+    assert "orphan-disk" in str(post.calls[0]["json"])
+
+
+def test_an_announced_ticket_is_not_announced_again(telegram, post):
+    r.request_human_approval("orphan-disk", "Delete disk", 60.0, target_memory="")
+    for ticket in memory_bank.data["approvals"]:
+        ticket.pop("notified_at", None)
+
+    assert notifications.announce_pending() == 1
+    assert notifications.announce_pending() == 0, "nobody wants the same ticket twice"
+
+
+def test_a_failed_delivery_leaves_it_unannounced_for_next_time(monkeypatch, telegram):
+    """A dead channel must not mark the ticket as handled."""
+    import httpx
+
+    r.request_human_approval("orphan-disk", "Delete disk", 60.0, target_memory="")
+    for ticket in memory_bank.data["approvals"]:
+        ticket.pop("notified_at", None)
+
+    monkeypatch.setattr(httpx, "post", Recorder(raises=OSError("down")))
+    assert notifications.announce_pending() == 0
+    assert memory_bank.unannounced_approvals(), "it must still be owed an announcement"
+
+
+def test_a_resolved_ticket_is_never_announced(telegram, post):
+    r.request_human_approval("orphan-disk", "Delete disk", 60.0, target_memory="")
+    memory_bank.resolve_approval("orphan-disk", "REJECTED")
+    post.calls.clear()
+
+    assert notifications.announce_pending() == 0
+
+
+def test_announcing_is_skipped_when_no_channel_is_configured(post):
+    r.request_human_approval("orphan-disk", "Delete disk", 60.0, target_memory="")
+    assert notifications.announce_pending() == 0
+    assert not post.calls

@@ -240,6 +240,30 @@ class MemoryBank:
         with self._lock:
             return [a for a in self.data["approvals"] if a["status"] == "PENDING"]
 
+    def unannounced_approvals(self) -> List[Dict[str, Any]]:
+        """Pending tickets nobody has been told about.
+
+        A ticket is only announced when it is created, and creation is guarded
+        against duplicates — so a ticket raised while no channel was configured,
+        or whose delivery failed, would otherwise sit pending forever with
+        nobody aware of it. That is precisely the silence the notifications
+        exist to break.
+        """
+        with self._lock:
+            return [
+                a for a in self.data["approvals"]
+                if a["status"] == "PENDING" and not a.get("notified_at")
+            ]
+
+    def mark_notified(self, ticket_id: str) -> None:
+        """Record that a human was actually reached about this ticket."""
+        with self._lock:
+            for approval in self.data["approvals"]:
+                if approval.get("ticket_id") == ticket_id:
+                    approval["notified_at"] = utcnow()
+                    self._persist()
+                    return
+
     # ------------------------------------------------------------------
     # Audit runs
     # ------------------------------------------------------------------
