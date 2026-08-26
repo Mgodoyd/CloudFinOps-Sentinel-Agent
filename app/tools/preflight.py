@@ -166,7 +166,7 @@ def run_preflight() -> Dict[str, Any]:
             import google.auth
 
             creds, detected = google.auth.default()
-            sa_email = getattr(creds, "service_account_email", None)
+            sa_email = _resolve_sa_email(creds)
             if sa_email:
                 global _SA_EMAIL
                 _SA_EMAIL = sa_email
@@ -370,6 +370,37 @@ def _billing_check() -> Dict[str, str]:
         "Cost source", OK,
         f"Reconciled against the billing export: {len(billed)} attributed resource(s).",
     )
+
+
+def _resolve_sa_email(creds: Any) -> Optional[str]:
+    """The identity this process actually runs as.
+
+    On Cloud Run `google.auth.default()` returns compute-engine credentials
+    whose `service_account_email` is the literal string "default" — the
+    metadata alias, not an address. Printed into a suggested command that
+    becomes `--member=serviceAccount:default`, which grants nothing and sends
+    the operator to fix permissions on an account that does not exist.
+
+    The metadata server knows the real address, so ask it.
+    """
+    email = getattr(creds, "service_account_email", None)
+    if email and email != "default":
+        return email
+
+    try:
+        import httpx
+
+        response = httpx.get(
+            "http://metadata.google.internal/computeMetadata/v1/"
+            "instance/service-accounts/default/email",
+            headers={"Metadata-Flavor": "Google"},
+            timeout=2.0,
+        )
+        if response.status_code == 200 and "@" in response.text:
+            return response.text.strip()
+    except Exception:
+        pass  # not on GCP, or the metadata server is not reachable
+    return None
 
 
 def _notification_check() -> Dict[str, str]:

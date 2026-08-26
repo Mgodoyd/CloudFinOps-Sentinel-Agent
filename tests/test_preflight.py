@@ -84,3 +84,47 @@ def test_no_hardcoded_project_remains_in_config():
 
     source = pathlib.Path("app/core/config.py").read_text()
     assert "synox-ai" not in source, "a stale project name must not be a default"
+
+
+def test_the_suggested_command_never_names_a_nonexistent_account(monkeypatch):
+    """On Cloud Run, google.auth returns credentials whose
+    `service_account_email` is the literal string "default" — the metadata
+    alias, not an address. Printed into a fix it becomes
+    `--member=serviceAccount:default`, which grants nothing and sends the
+    operator to repair permissions on an account that does not exist.
+    """
+    from app.tools import preflight
+
+    class ComputeCreds:
+        service_account_email = "default"
+
+    monkeypatch.setattr("httpx.get", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    assert preflight._resolve_sa_email(ComputeCreds()) is None, (
+        "unknown is better than a wrong address: the fix line falls back to a "
+        "placeholder the operator must replace, instead of one that looks real"
+    )
+
+
+def test_a_real_service_account_email_is_used_as_is(monkeypatch):
+    class KeyCreds:
+        service_account_email = "sentinel-agent@a-project.iam.gserviceaccount.com"
+
+    from app.tools import preflight
+
+    assert preflight._resolve_sa_email(KeyCreds()) == KeyCreds.service_account_email
+
+
+def test_the_metadata_server_supplies_the_address_on_cloud_run(monkeypatch):
+    from app.tools import preflight
+
+    class ComputeCreds:
+        service_account_email = "default"
+
+    class Response:
+        status_code = 200
+        text = "sentinel-agent@a-project.iam.gserviceaccount.com\n"
+
+    monkeypatch.setattr("httpx.get", lambda *a, **k: Response())
+    assert preflight._resolve_sa_email(ComputeCreds()) == (
+        "sentinel-agent@a-project.iam.gserviceaccount.com"
+    )
