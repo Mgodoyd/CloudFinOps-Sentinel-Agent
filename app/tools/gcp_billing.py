@@ -42,23 +42,44 @@ def last_error() -> Optional[Exception]:
 # One query per audit, over the last full month, grouped by service. The billing
 # export is partitioned on usage date and charged by bytes scanned, so the date
 # filter is what keeps this cheap rather than a nicety.
+# One query per audit, over the last full month, grouped by service. The billing
+# export is partitioned on usage date and charged by bytes scanned, so the date
+# filter is what keeps this cheap rather than a nicety.
+#
+# The window the rows actually span is computed in its own CTE and cross-joined
+# back. Doing it inline with MIN(...) OVER () puts an analytic function in the
+# GROUP BY, which BigQuery rejects — and no unit test can catch that, because
+# they all mock the client and never send the SQL anywhere that parses it.
 _QUERY = """
+WITH scoped AS (
+  SELECT
+    usage_start_time,
+    cost,
+    COALESCE(
+      (SELECT value FROM UNNEST(labels) WHERE key = 'goog-cloud-run-service-name'),
+      (SELECT value FROM UNNEST(labels) WHERE key = 'goog-k8s-cluster-name'),
+      resource.name,
+      service.description
+    ) AS resource_id,
+    IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0) AS credit
+  FROM `{table}`
+  WHERE project.id = @project
+    AND usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
+),
+span AS (
+  SELECT MIN(usage_start_time) AS window_start,
+         MAX(usage_start_time) AS window_end
+  FROM scoped
+)
 SELECT
-  MIN(usage_start_time) OVER () AS window_start,
-  MAX(usage_start_time) OVER () AS window_end,
-  COALESCE(
-    (SELECT value FROM UNNEST(labels) WHERE key = 'goog-cloud-run-service-name'),
-    (SELECT value FROM UNNEST(labels) WHERE key = 'goog-k8s-cluster-name'),
-    resource.name,
-    service.description
-  ) AS resource_id,
-  SUM(cost) AS cost,
-  SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS credits
-FROM `{table}`
-WHERE project.id = @project
-  AND usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
-GROUP BY resource_id, window_start, window_end
-HAVING resource_id IS NOT NULL
+  span.window_start AS window_start,
+  span.window_end   AS window_end,
+  scoped.resource_id AS resource_id,
+  SUM(scoped.cost)   AS cost,
+  SUM(scoped.credit) AS credits
+FROM scoped CROSS JOIN span
+WHERE scoped.resource_id IS NOT NULL
+GROUP BY scoped.resource_id, span.window_start, span.window_end
 """
 
 
@@ -136,6 +157,36 @@ def fetch_billed_costs() -> Optional[Dict[str, Any]]:
         len(billed), days,
     )
     return {"costs": billed, "days_covered": days}
+
+
+def validate_query() -> Optional[str]:
+    """Ask BigQuery to parse the query without running it. None means valid.
+
+    A dry run costs nothing and is the only thing that actually checks the SQL:
+    every unit test here mocks the client, so a syntactically invalid query
+    passes all of them and fails only in production. That is exactly how an
+    analytic function ended up in a GROUP BY.
+    """
+    if not is_configured():
+        return "BILLING_EXPORT_TABLE is not set."
+
+    from google.cloud import bigquery
+
+    config = bigquery.QueryJobConfig(
+        dry_run=True,
+        use_query_cache=False,
+        query_parameters=[
+            bigquery.ScalarQueryParameter("project", "STRING", settings.PROJECT_ID),
+            bigquery.ScalarQueryParameter("days", "INT64", settings.BILLING_LOOKBACK_DAYS),
+        ],
+    )
+    try:
+        _client().query(
+            _QUERY.format(table=settings.BILLING_EXPORT_TABLE), job_config=config
+        )
+        return None
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
 
 
 def to_monthly(cost: float, days_covered: Optional[float] = None) -> float:

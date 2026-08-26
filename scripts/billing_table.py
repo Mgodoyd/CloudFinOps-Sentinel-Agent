@@ -64,8 +64,22 @@ def main() -> int:
         env = env.rstrip("\n") + f"\n{line}\n"
     open(".env", "w").write(env)
 
-    print("Written to .env. Restart the service — configuration is read once at")
-    print("startup — then check /api/preflight for 'Cost source'.")
+    print("Written to .env.")
+
+    # A dry run parses the SQL against the real table for free. The unit tests
+    # all mock BigQuery, so this is the only place the query is actually checked.
+    os.environ["BILLING_EXPORT_TABLE"] = table
+    settings.BILLING_EXPORT_TABLE = table
+    from app.tools import gcp_billing
+
+    problem = gcp_billing.validate_query()
+    if problem:
+        print(f"\nThe query does not run against this table:\n  {problem}")
+        return 1
+    print("Query validated against the table (dry run, no cost).")
+
+    print("\nRestart the service — configuration is read once at startup —")
+    print("then check /api/preflight for 'Cost source'.")
     return 0
 
 

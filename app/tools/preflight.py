@@ -392,6 +392,11 @@ def _billing_check() -> Dict[str, str]:
             detail = f"No such table: {settings.BILLING_EXPORT_TABLE}"
             fix = ("Check BILLING_EXPORT_TABLE. The export takes up to 24h to create "
                    "it, and only the Detailed export has the columns this reads.")
+        elif "invalidQuery" in text or "400" in text:
+            # Not a permissions problem, and suggesting roles here sends the
+            # operator to fix an account that is already correct.
+            detail = f"The billing query was rejected. {text[:200]}"
+            fix = "This is a bug in the query, not in your configuration."
         else:
             detail = (f"Could not read {settings.BILLING_EXPORT_TABLE}."
                       + (f" {text[:160]}" if text else ""))

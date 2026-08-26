@@ -259,3 +259,37 @@ def test_an_empty_export_is_ok_and_says_it_is_still_filling(monkeypatch, configu
     assert check["status"] == "ok"
     assert "0 attributed" in check["detail"]
     assert "24h" in check["detail"]
+
+
+def test_the_query_never_groups_by_an_analytic_function():
+    """The bug these mocks cannot catch.
+
+    Every test here fakes the BigQuery client, so the SQL is never sent
+    anywhere that parses it — an invalid query passes the whole suite and fails
+    only against the real table. `MIN(...) OVER ()` in the SELECT list forced
+    the window columns into the GROUP BY, which BigQuery rejects outright.
+
+    A string check is a poor substitute for a parser; `gcp_billing.validate_query()`
+    does it properly with a free dry run, and `scripts/billing_table.py` runs it.
+    """
+    query = gcp_billing._QUERY
+    group_by = query[query.index("GROUP BY"):]
+    assert "OVER" not in group_by
+    assert "OVER ()" not in query, (
+        "compute the window in its own CTE and cross-join it back"
+    )
+
+
+def test_a_rejected_query_is_not_reported_as_a_permissions_problem(monkeypatch, configured):
+    use(monkeypatch, FakeBQ(error=RuntimeError(
+        "400 Column window_start contains an analytic function, "
+        "which is not allowed in GROUP BY; reason: invalidQuery")))
+
+    from app.tools.preflight import _billing_check
+
+    check = _billing_check()
+    assert "bug in the query" in check["fix"]
+    assert "roles/" not in check["fix"], (
+        "sending someone to re-grant roles that are already correct is worse "
+        "than saying nothing"
+    )
