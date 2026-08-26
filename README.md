@@ -20,9 +20,10 @@ Built on **Gemini 3.5 Flash-Lite** through the **GenAI SDK**, running on
 > with **Firestore**, **Cloud Scheduler**, **Secret Manager**, **BigQuery** and
 > **Cloud Trace**.
 >
-> [**docs/HACKATHON.md**](docs/HACKATHON.md) maps every requirement and judging
+> [**docs/SUBMISSION.md**](docs/SUBMISSION.md) maps every requirement and judging
 > criterion to where this project answers it, and carries the findings and
-> learnings.
+> learnings. [**docs/HACKATHON.md**](docs/HACKATHON.md) is the event's own brief,
+> kept unedited for the record.
 
 ---
 

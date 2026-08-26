@@ -1,190 +1,210 @@
-# All Things Agentic Hackathon — submission notes
+# All Things Agentic Hackathon
 
-A map from what the hackathon asked for to where this project answers it, so a
-judge can check a requirement without reading the whole codebase first.
-
-- **Hackathon** · All Things Agentic, run by Google on Devpost
-- **Deadline** · 31 August 2026, 18:00 CST
-- **Track** · **The Taskmaster**
-- **Live service** · Cloud Run, `us-central1`
-- **Repository** · <https://github.com/Mgodoyd/CloudFinOps-Sentinel-Agent>
+> Verbatim copy of the event brief as published on Devpost, kept unedited as a
+> record of the rules and guidelines this project was built against.
+> Captured 26 August 2026. Typos are the original's.
+>
+> How this project answers it: [SUBMISSION.md](SUBMISSION.md).
 
 ---
 
-## What the hackathon asked for
+All Things Agentic Hackathon
+Ready, Set, Agent! Build next-generation agents that run in the background, handle the heavy lifting of massive datasets, and automate complex workflows asynchronously.
+Join hackathon
+Who can participate
+Above legal age of majority in country of residence
+Specific countries/territories excluded 
+View full rules
+5 days to deadline
+View schedule
 
-> *Most AI today waits for you to ask. The next generation doesn't. AI agents
-> are systems that can take a goal, make a plan, and actually carry it out —
-> pulling information, making decisions, and completing multi-step tasks on
-> their own, while you do something else.*
+Deadline
 
-Build and deploy an autonomous agent on **Gemini 3.5 or newer**, using at least
-one **Google agent framework** and at least one **Google Cloud infrastructure
-service**, that operates beyond a chat loop — running asynchronously in the
-background and handling the heavy lifting of a real workflow.
+31 ago 2026 @ 6:00pm CST 
+Online
+Public
+$180,000 in cash	8476 participants
+Google
+Devpost icon rgb30px
+Managed by Devpost
+Enterprise Machine Learning/AI Productivity
 
-## Why The Taskmaster
+A global hackathon to build next-generation AI agents on Gemini and Google Cloud. All skill levels welcome. 
 
-The track asks for *"a complete workflow, not just a chatbot"* — an agent that
-finds a messy, multi-step chore, handles the details, **sends the right info to
-the right places**, and does the heavy lifting.
+Most AI today waits for you to ask. The next generation doesn't. AI agents are systems that can take a goal, make a plan, and actually carry it out — pulling information, making decisions, and completing multi-step tasks on their own, while you do something else.
 
-Cloud waste is exactly that chore. It is not hard to understand; it is hard to
-stay on top of. A service is provisioned at 4 GiB "to be safe" and never touched
-again. Someone sets `min-instances=1` to dodge cold starts on a service that
-serves forty requests a day, and it bills around the clock forever. A disk
-outlives the VM it was attached to. None of it is difficult to spot — it is just
-nobody's job this week, and the bill arrives monthly.
+All things agentic hacakthon is a global hackathon that challenges you to build one. Using Gemini, Google's open-source Agent Development Kit (ADK), and Google Cloud, you'll create an agent that takes real action to remove everyday friction — at work, at home, or across an entire enterprise.
 
-Every hour, unattended, this agent scans four Google Cloud APIs across ten
-regions, prices what it finds against what it actually uses, asks Gemini for
-judgement and a plan, applies the small reversible changes itself, and pushes
-the ones a human still owns to Slack and Telegram. The output is not a report.
-It is a changed estate, a queue of decisions waiting for a person, and a full
-audit trail of why.
+You don't need to be an AI researcher to take part. Whether you're a seasoned engineer or building your first agent, we give you the tools, starter guides, and $150 in Google Cloud credits to go from idea to working demo. Pick a track, build your agent, and show us what "autonomous" really looks like.
 
-The other two tracks were considered and set aside deliberately. *Collaborative
-Partner* wants stateful multi-turn dialogue; this agent does not converse, and
-bolting on a chat interface would have diluted it. *Fortified Enterprise Fleet*
-wants a **network** of catalogued agents; this is one agent, and three of the
-pieces that track names are here (Memory Bank, Agent Observability, long-running
-asynchronous execution) but a registry and a gateway are not.
+Whether you're a full-stack engineer, a system architect, or a startup founder, this hackathon hands you the tools to build agents that actively work for everyone. Redefining interaction — from static chatbots to immersive experiences. 
 
----
+ 
 
-## Required technologies
+How to Get Started
+Follow these steps to go from sign-up to submission in a weekend and lean on the Resources tab, packed with guides, credits, and cost-saving tips to help you win.
 
-| Requirement | How it is met | Where |
-|---|---|---|
-| **Gemini 3.5 or newer**, via Gemini API or Vertex AI | `gemini-3.5-flash-lite` for per-resource judgement and planning. `USE_VERTEX=true` switches the same code to Vertex AI. | [`app/core/analyst.py`](../app/core/analyst.py), [`app/core/planner.py`](../app/core/planner.py) |
-| **A Google agent framework** | **GenAI SDK** (`google-genai`) — structured output via `response_schema`, so the shape is validated by the SDK rather than parsed hopefully. | [`app/core/agent.py`](../app/core/agent.py) |
-| **A Google Cloud infrastructure service** | **Cloud Run** (the service), **Firestore** (Memory Bank), **Cloud Scheduler** (hourly trigger), **Secret Manager** (credentials), **BigQuery** (billing export), **Cloud Trace** (spans). | [`deploy/deploy.sh`](../deploy/deploy.sh) |
-| **Runs asynchronously in the background** | Cloud Scheduler drives an hourly audit into `/webhook/pubsub`. Nothing needs a browser open. | [`app/main.py`](../app/main.py) |
-| **Beyond a chat loop** | Observe → Analyse → Plan → Execute → Adapt → Remember. Two model calls per audit, a fixed toolbox, and an autonomy matrix enforced in code. | [README · the agent loop](../README.md#the-agent-loop) |
+Get your tools. Sign up for a no-cost Google Cloud trial, then grab your $150 in Google Cloud credits using the credit form on the Resources tab.
+Learn the basics. New to agents? The beginner guides in Resources walk you through what an agent is and how to build your first one with ADK — no experience required.
+Pick a track. Choose the one that fits your idea: The Taskmaster, The Collaborative Partner, or The Fortified Enterprise Fleet. Enter any track you like — full track breakdowns are waiting in Resources.
+Build on Gemini + Google Cloud. Keep your spend low with the cost-saving tips in Resources.
+Submit before the deadline: a demo video, your code repo, an architecture diagram, and a short write-up. Full checklist below under "What to Submit."
+Everything you need is one click away — hit View Resources to explore the guides, credits, and track deep-dives.
 
-### Bonus: another Google AI model
 
-**Gemma 4 31b** is the second tier. When Gemini returns nothing — quota,
-capacity, a timeout — Gemma writes the fleet summary the report would otherwise
-lose, and the per-resource judgement degrades to deterministic rules. Same API,
-same SDK, so it is a model name rather than a second integration.
 
-The narrowness of its job is measured, not stylistic: asked for the analyst's
-full per-resource schema Gemma did not answer inside a usable deadline, while
-the same fleet summarised in a paragraph came back in about eighteen seconds.
-[The numbers are in the README](../README.md#degradation-has-three-steps-not-two).
 
----
+Tips to be successful: solve a real, specific problem you actually have; show your agent doing something, not just talking; keep your demo video tight and show it working live; and document your project so a judge can follow it. 
 
-## Judging criteria
+Requirements
+What to Build
+Build and deploy a next-generation, autonomous AI Agent leveraging Gemini 3.5 Flash that operates beyond standard chat loops. The system can run asynchronously in the background, handle the heavy lifting of complex workflows, or dynamically manipulate data pipelines and representations.
 
-### Innovation & Operational Utility — 40%
+Projects must be built within one of these three categories: 
 
-> *How much real-world friction does the agent remove on its own?*
 
-It runs hourly with nobody watching, and it acts. Level 1 changes — reversible,
-under $40/month — are applied without asking. Level 2 changes become a ticket
-that reaches the operator's phone. It remembers what it fixed, what shape each
-resource had when it acted, and what a human declined, so it never proposes the
-same thing twice and never re-raises a rejected change.
+Taskmaster: Build a complete workflow, not just a chatbot. Don't just make an agent that writes text. Make one that takes action. Find a messy, multi-step chore in your job, classes, or personal life. Build an agent that handles the details, sends the right info to the right places, and proves it can do the heavy lifting for you.
 
-It also audits its own service. `cloudfinops-sentinel` appears in its own
-inventory at $6.88/month. That was not designed; it falls out of treating the
-project as the estate, with no exceptions.
+Collaborative Partner: Build an agent that leads the way and takes notes. It should ask clarifying questions, guide the user step-by-step, and have a clear way to capture feedback, so it constantly adapts to the user's unique way of thinking.
 
-### Architectural Discipline & Tech Stack — 30%
+Fortified Enterprise Fleet: Build a scalable network of institutional agents that hook into official enterprise infrastructure. Teams must demonstrate how agents are cataloged for cross-department use, how they safely maintain context across weeks of asynchronous operations, and how they interact with production data without violating enterprise compliance, data sovereignty, or security policies.
 
-> *Robust, production-minded agents, not brittle scripts.*
+Discovery & Lifecycle: Agent Registry (the central repository for publishing, versioning, and discovering enterprise-approved agents).
 
-| | |
-|---|---|
-| **Decoupling** | Measurement, judgement, planning, gating and execution are separate modules with one job each. The model can be removed and the audit still completes. |
-| **State** | Firestore on Cloud Run, a JSON file locally, chosen automatically. Simulated and real runs get separate memory banks so a demo cannot queue a change against a live project. |
-| **Credentials** | Secret Manager for the Gemini key, the dashboard token, the bot token and the Slack webhook. No default in code, and [a test](../tests/test_no_committed_secrets.py) that fails the build if a credential is committed. |
-| **Failure handling** | Gemini → Gemma → deterministic rules. A failed plan step is re-planned around, up to twice. Firestore unreachable starts anyway. Every degraded run says so. |
-| **Security** | Token auth with no development bypass, a separate scheduler credential, constant-time comparison, and [prompt-injection guardrails](../README.md#the-estate-is-untrusted-input) treating resource names as untrusted input. |
-| **Tests** | 390 passing, no credentials required, hermetic. Several exist because the bug happened: the approval contract, simulated/real isolation, the duplicate notification. |
+Core Execution & State: Agent Runtime (for long-running, asynchronous background execution) and Memory Bank (for persistent, secure cross-session context over extended timelines).
 
-### Demo & Production Readiness — 30%
+Security & Governance: Agent Identity (For zero-trust access control), Agent Gateway (for unified routing and policy enforcement), and Model Armor (inline guardrails to block prompt injection, tool poisoning, and PII leaks).
 
-> *Visible proof it runs on Google Cloud.*
+Telemetry: Agent Observability (OpenTelemetry-compliant audit logs and end-to-end reasoning chain traces).
 
-[Six captures from the deployed service](../README.md#running-on-google-cloud):
-the deck on its `.run.app` URL reading real Cloud Run services through Cloud
-Monitoring with live writes enabled, the Cloud Run console, the Cloud Scheduler
-job, the Memory Bank document in Firestore, OpenTelemetry spans in Cloud Trace,
-and an approval arriving on a phone.
+Recommended Tech to use (Gemini Enterprise Agent Platform): 
 
-`./deploy/deploy.sh` is one command: APIs, a least-privilege service account,
-Firestore, secrets, build, deploy, and the hourly schedule.
 
----
 
-## Submission checklist
+Every project, in every track, must use:
 
-| Item | Status |
-|---|---|
-| Hosted project URL | Cloud Run, `us-central1` |
-| Spin-up instructions in README | [Spin-up instructions](../README.md#spin-up-instructions) |
-| Architecture diagram | [`docs/img/architecture.png`](img/architecture.png), plus [the decision model](img/decision-model.png) |
-| Public code repository | this repository |
-| Proof it runs on Google Cloud | [Running on Google Cloud](../README.md#running-on-google-cloud) |
-| Findings and learnings | below |
-| ~4-minute demo video | *submitted on Devpost* |
-| Bonus — another Google AI model | Gemma 4 31b as the second tier |
+Gemini 3.5 or newer accessed through Gemini API or Vertex AI
 
----
+At least one Google Agent Framework: Google ADK, GenAI SDK, Antigravity SDK or GenKit 
 
-## Findings and learnings
+At least one Google Cloud infrastructure service (such as Cloud Run, Cloud SQL, Firestore, GKE, Pub/Sub).
 
-**The bug that taught me most.** The agent opened a ticket reading "reduce to
-1 vCPU and 2Gi" and applied 512Mi. The planner returns only the dimensions it
-cares about — a step meaning "scale to zero" carries `min_instances` and no
-memory — and the executor filled the gap with a constant. On a service with a
-5 GB observed peak that is an out-of-memory kill in production. It appeared in
-four separate code paths, two of which execute without a human. The lesson: in a
-human-in-the-loop system, what is approved and what is executed have to come
-from the same data structure, never from two paths that ought to agree.
+Note on cost & deployment: Your app does not need to be publicly accessible or live at the exact moment of submission or judging (so you don't rack up unnecessary costs). You just need to provide clear proof that it was built and deployed on Google Cloud — for example, shown in your demo video and code repository. See Resources for tips on keeping your costs near zero.
 
-**Thresholds must be tested against measurement, not against the model.** The
-autonomy level and the booked savings were being compared against Gemini's
-`estimated_saving`. The model guessed $250 where the cost model computed
-$148.15. If the number deciding whether a human must approve comes from the
-model, the autonomy matrix means nothing.
+ 
+What to Submit 
+Category 
 
-**A model narrates changes it does not encode.** It said "2 vCPU and 8Gi" in
-prose and returned `cpu: "1"` in the arguments — a combination Cloud Run rejects
-at deploy time. Prose from an LLM is not a contract; the structure has to be
-validated against the provider's own rules.
+URL to the hosted Project (if available) for judging and testing, such as web UI, Chrome Extension, mobile app, etc. A hosted project is highly encouraged.
 
-**The estate is untrusted input.** Resource names go into the prompt of an agent
-holding write credentials, and anyone who can deploy a service chooses them.
-Writing the guardrails surfaced two bugs in the guardrails themselves: an edit
-to the system instruction had silently not applied, and the marker patterns
-matched on whitespace when GCP names use hyphens — so they would have caught
-nothing that can exist in a real project.
+Text description 
 
-**Models are retired for new keys only.** `gemini-2.5-flash` appears in
-`models.list()` and returns 404 when called with a recently created key. A 404
-there means "not available to your key", not "your key is invalid", and sending
-someone to regenerate a working credential is the worst possible error message.
+Features and functionality
 
-**Live models are not a lighter Flash.** They speak `bidiGenerateContent` over a
-WebSocket. Configuring one produces a failure that looks like a broken
-credential.
+Technologies used
 
-**The free tier forces architecture.** Five requests per minute means a
-tool-calling loop exhausts the minute on a single audit. Two structured calls —
-one to judge the whole fleet, one to plan — is not an optimisation, it is what
-makes the system viable.
+Other data sources used
 
-**Ask a model for work it can deliver.** Gemma could not return the analyst's
-per-resource schema inside any usable deadline: over 100 s for a single
-resource, `504` for the fleet. The same fleet summarised in a paragraph came
-back in 18 s. Measuring first turned a feature that would have timed out in the
-demo into one that works.
+Findings and learnings 
 
-**"Tolerated" exists for human reasons, not technical ones.** A resource with
-$1/month of recoverable waste is correctly sized in practice. Painting it red
-implies an action nobody will take, and a fleet that always looks broken teaches
-operators to ignore the colour.
+URL to your public or private code repository (on Github, Gitlab, or Bitbucket) to show how your project was built. If your repo is private, share it with testing@devpost.com and cloudhackathons@google.com 
+
+Spin-up Instructions: A step-by-step guide in your README.md explaining how to set up and run the project locally or deploy it to the cloud. Even if the judges do not run it, these instructions prove the project is reproducible.
+
+Architecture Diagram with a clear visual representation of your system (e.g., how Gemini connects to your backend, database, and frontend).
+
+~ 4-min Demo video 
+
+Short overview of the problem your Project is solving
+
+Value proposition 
+
+Demo of the app in action
+
+Must demonstrate the backend is running on Google Cloud (ie: Google Cloud Console, Cloud Run dashboard, Vertex AI logs, URL of .run, etc)
+
+For Bonus Points, optionally you can do one or both of the following: 
+
+Publish a piece of content (blog, podcast, video): Covering how the project was built on any public platform (e.g., medium.com, dev.to, YouTube, etc.). The content must be public (not unlisted). You must include language that says you created the piece of content for the purposes of entering this hackathon.
+Publish a social media post: Highlight or promote your project on social media post on X, LinkedIn, Instagram, or Facebook. For any social media posts on platforms such as X or LinkedIn, include the hashtag #AllThingsAgenticHackathon.
+Successfully integrate Google AI models such as Gemma, Veo or Lyria.
+Questions? Start with the FAQs for the quick answers on eligibility, tracks, credits, and submissions and see the Official Rules for anything binding.
+
+
+Prizes
+$180,000 in prizes
+Grand Prize
+$50,000 in cash
+1 winner
+• $50,000 in USD
+• $5,000 in Google Cloud Credits for use with a Cloud Billing Account
+• Virtual Coffee with a Google Team Member
+• Social Promo
+
+The Taskmaster
+$20,000 in cash
+1 winner
+•$20,000 in USD
+• $2,000 in Google Cloud Credits for use with a Cloud Billing Account
+• Virtual Coffee with a Google Team Member
+• Social Promo
+
+The Collaborative Partner
+$20,000 in cash
+1 winner
+• $20,000 in USD
+• $2,000 in Google Cloud Credits for use with a Cloud Billing Account
+• Virtual Coffee with a Google Team Member
+• Social Promo
+
+The Fortified Enterprise Fleet
+$20,000 in cash
+1 winner
+• $20,000 in USD
+• $2,000 in Google Cloud Credits for use with a Cloud Billing Account
+• Virtual Coffee with a Google Team Member
+• Social Promo
+
+Startup Excellence (Incorporated Organizations eligible - see rules for details)
+$20,000 in cash
+1 winner
+• $20,000 in USD
+• $5000 in Google Cloud Credits for use with a Cloud Billing Account
+• Virtual Coffee with a Google Team Member
+• Social Promo
+
+Must be submitting on behalf of an organization that is incorporated, and you must provide a corporate email address
+
+Individual/Hobbyist (Best Team/Solo Build)
+$10,000 in cash
+2 winners
+• $10,000 in USD
+• $1000 in Google Cloud Credits for use with a Cloud Billing Account
+• Virtual Coffee with a Google Team Member
+• Social Promo
+
+Best Architectural Design
+$5,000 in cash
+2 winners
+• $5,000 in USD
+• $1000 in Google Cloud Credits for use with a Cloud Billing Account
+
+Best Multimodal UX
+$5,000 in cash
+2 winners
+• $5,000 in USD
+• $1000 in Google Cloud Credits for use with a Cloud Billing Account
+
+Honorable Mentions
+$2,000 in cash
+5 winners
+• $2,000 in USD
+• $500 in Google Cloud Credits for use with a Cloud Billing Account
+
+Judging Criteria
+Innovation & Operational Utility- 40%
+How much real-world friction does the agent remove on its own? We reward autonomous, high-value action over simple chat — agents that make decisions and complete tasks with little to no hand-holding.
+Architectural Discipline & Tech Stack- 30%
+How sound are your engineering choices? We look at how you decouple systems, manage state and memory, secure credentials, and handle failures — robust, production-minded agents, not brittle scripts.
+Demo & Production Readiness- 30%
+How clearly do your video and repo prove it works? We want a live, unedited demo, a clean architecture diagram, reproducible setup, and visible proof it runs on Google Cloud.
