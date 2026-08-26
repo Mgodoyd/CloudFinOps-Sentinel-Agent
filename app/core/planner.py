@@ -12,9 +12,10 @@ tool invocation, which exhausts a free-tier minute on a single audit.
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from app.core.config import settings
+from app.core import guardrails
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,16 @@ PLAN_SCHEMA: Dict[str, Any] = {
 VALID_TOOLS = {t["tool"] for t in TOOLBOX}
 
 
+def _unwrap(value: Any) -> str:
+    """A model that echoes the delimiters back still names a real resource."""
+    text = str(value or "").strip()
+    if text.startswith(guardrails.UNTRUSTED_OPEN):
+        text = text[len(guardrails.UNTRUSTED_OPEN):]
+    if text.endswith(guardrails.UNTRUSTED_CLOSE):
+        text = text[: -len(guardrails.UNTRUSTED_CLOSE)]
+    return text.strip()
+
+
 class Planner:
     def __init__(self, client: Any, model: str):
         self.client = client
@@ -172,13 +183,14 @@ class Planner:
         }
         plan = self._call("Produce an execution plan for this estate:\n"
                           + json.dumps(payload, indent=2))
-        return self._validate(plan)
+        return self._validate(plan, {r["resource_id"] for r in resources})
 
     def replan(
         self,
         plan: Dict[str, Any],
         failures: List[Dict[str, str]],
         completed: List[str],
+        known: Optional[Set[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Adapt the plan after one or more steps failed."""
         if not self.client or not failures:
@@ -199,31 +211,50 @@ class Planner:
             "These steps failed. Produce a revised plan for what remains, "
             "adapting or skipping what failed:\n" + json.dumps(payload, indent=2)
         )
-        return self._validate(revised)
+        return self._validate(revised, known)
 
     # ------------------------------------------------------------------
     @staticmethod
-    def _validate(plan: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Drop steps naming a tool that does not exist.
+    def _validate(
+        plan: Optional[Dict[str, Any]], known: Optional[Set[str]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Drop steps this agent cannot or must not carry out.
 
-        A schema enum makes this unlikely, but the executor must never be handed
-        a tool name it cannot dispatch — that is how an agent silently does
-        nothing while reporting success.
+        Two checks, and the second matters more than it looks. The tool enum
+        makes an unknown tool unlikely, but the executor must never be handed a
+        name it cannot dispatch — that is how an agent silently does nothing
+        while reporting success.
+
+        The target was never constrained at all. A resource name reaches the
+        model from the estate, and a step aimed at something that was never
+        measured is a step against a resource nobody looked at. Constraining the
+        verb and leaving the object free is half a guardrail.
         """
         if not plan or not isinstance(plan.get("steps"), list):
             return None
 
-        valid, rejected = [], []
+        valid, rejected, unmeasured = [], [], []
         for step in plan["steps"]:
-            if step.get("tool") in VALID_TOOLS and step.get("resource_id"):
-                step.setdefault("args", {})
-                valid.append(step)
-            else:
+            rid = _unwrap(step.get("resource_id"))
+            if step.get("tool") not in VALID_TOOLS or not rid:
                 rejected.append(step.get("tool"))
+                continue
+            if known is not None and rid not in known:
+                unmeasured.append(rid)
+                continue
+            step["resource_id"] = rid
+            step.setdefault("args", {})
+            valid.append(step)
 
         if rejected:
             logger.warning("Planner proposed unknown tool(s): %s", rejected)
+        if unmeasured:
+            logger.warning(
+                "Planner named %d resource(s) that were never measured: %s",
+                len(unmeasured), unmeasured[:5],
+            )
 
         plan["steps"] = sorted(valid, key=lambda s: s.get("order", 0))
         plan["rejected_steps"] = rejected
+        plan["unmeasured_steps"] = unmeasured
         return plan

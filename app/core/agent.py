@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from app.core.config import settings
 from app.core import telemetry
 from app.core.trace import ANALYSIS, APPROVAL, DECISION, PLANNING, tracer
+from app.core import guardrails
 from app.core.analyst import (
     FleetAnalyst,
     clear_analysis,
@@ -413,7 +414,9 @@ class CloudFinOpsAgent:
                 PLANNING, f"{len(failures)} step(s) failed — asking the model to re-plan",
                 status="warn", detail={"failures": failures, "attempt": replans},
             )
-            revised = planner.replan(plan, failures, completed)
+            revised = planner.replan(
+                plan, failures, completed, {r["resource_id"] for r in fleet}
+            )
             if not revised or not revised.get("steps"):
                 break
             results, failures = executor.run(revised)
@@ -723,6 +726,19 @@ class CloudFinOpsAgent:
                 fleet = build_full_inventory()
             except Exception:
                 fleet = describe_resources()[0]
+            # A resource whose name is talking to the model is worth an
+            # operator's attention, whoever put it there and whyever. Surfaced,
+            # not swallowed — the cleaning already happened in the prompt.
+            suspicious = guardrails.scan_fleet(fleet)
+            if suspicious:
+                tracer.step(
+                    ANALYSIS,
+                    f"{len(suspicious)} resource name(s) contain instruction-shaped "
+                    "text — quoted to the model as data only",
+                    status="warn",
+                    detail={"findings": suspicious},
+                )
+
             with telemetry.span(
                 "agent.analyse",
                 **{"gen_ai.system": "gemini", "gen_ai.request.model": self.model_name,

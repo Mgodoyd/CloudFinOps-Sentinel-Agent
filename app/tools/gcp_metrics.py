@@ -93,6 +93,25 @@ class _TTLCache:
 
 
 _services_cache = _TTLCache(settings.METRICS_CACHE_TTL)
+# Billing moves once a day, so this is cached far longer than the inventory —
+# and every query costs money and scans a partitioned table.
+_billing_cache = _TTLCache(3600)
+
+
+def billed_costs(allow_discovery: bool = True) -> Optional[Dict[str, float]]:
+    """What Google charged per resource, or None when the export is not set up."""
+    from app.tools import gcp_billing
+
+    if not gcp_billing.is_configured() or settings.MOCK_MODE:
+        return None
+
+    cached = _billing_cache.get()
+    if cached is not None:
+        return cached
+    if not allow_discovery:
+        return _billing_cache.last()
+
+    return _billing_cache.set(gcp_billing.fetch_billed_costs())
 
 
 # ----------------------------------------------------------------------
@@ -387,6 +406,18 @@ def describe_resources(
                 ),
             }
         )
+
+    # What Google actually charged, where the export can attribute it. Absent
+    # is the normal case and stays absent: an invented $0.00 would be a worse
+    # claim than saying nothing.
+    from app.tools import gcp_billing
+
+    billed = billed_costs(allow_discovery=allow_discovery)
+    if billed is not None:
+        for resource in enriched:
+            reconciliation = gcp_billing.reconcile(resource, billed)
+            if reconciliation:
+                resource["billing"] = reconciliation
 
     enriched.sort(key=lambda r: r["monthly_cost"], reverse=True)
     return enriched, source

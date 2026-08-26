@@ -102,6 +102,17 @@ class Settings(BaseSettings):
     # 31b measured faster than 26b on this workload, counterintuitively.
     GEMMA_MODEL: str = "gemma-4-31b-it"
 
+    # --- Real cost, from the billing export -------------------------------
+    # The cost model prices the allocation; this is what Google actually
+    # charged. Optional: the export takes a day to start producing rows, costs
+    # money to query, and the estimate stands alone without it.
+    # Format: project.dataset.gcp_billing_export_resource_v1_XXXXXX_XXXXXX_XXXXXX
+    BILLING_EXPORT_TABLE: str = ""
+    BILLING_LOOKBACK_DAYS: int = 30
+    BILLING_TIMEOUT: float = 30.0
+    # A runaway scan over a billing export is itself a cost incident.
+    BILLING_MAX_BYTES: int = 2_000_000_000
+
     # --- Outbound notifications -------------------------------------------
     # The agent runs while nobody is watching. A ticket nobody is told about is
     # a human-in-the-loop that depends on someone happening to open a dashboard.

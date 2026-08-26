@@ -22,6 +22,12 @@ def planner_returning(payload):
     return Planner(type("C", (), {"models": Models()})(), "m"), Models
 
 
+# The planner will only target resources that were actually measured, so a
+# fixture has to say which estate its steps refer to.
+FLEET_AB = [{"resource_id": "a", "type": "Cloud Run"},
+            {"resource_id": "b", "type": "Cloud Run"}]
+
+
 def test_a_plan_is_ordered_by_the_model():
     p, _ = planner_returning({
         "goal": "cut idle spend",
@@ -32,7 +38,7 @@ def test_a_plan_is_ordered_by_the_model():
              "expected_outcome": "cheaper", "estimated_saving": 50.0},
         ],
     })
-    plan = p.plan({"by_resource": {}}, [], [])
+    plan = p.plan({"by_resource": {}}, FLEET_AB, [])
     assert [s["order"] for s in plan["steps"]] == [1, 2]
     assert plan["goal"] == "cut idle spend"
 
@@ -49,7 +55,7 @@ def test_a_hallucinated_tool_is_dropped_not_dispatched():
              "expected_outcome": "y", "estimated_saving": 0.0},
         ],
     })
-    plan = p.plan({"by_resource": {}}, [], [])
+    plan = p.plan({"by_resource": {}}, FLEET_AB, [])
     assert [s["tool"] for s in plan["steps"]] == ["skip"]
     assert plan["rejected_steps"] == ["reboot_universe"]
 

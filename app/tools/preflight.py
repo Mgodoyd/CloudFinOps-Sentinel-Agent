@@ -154,6 +154,7 @@ def run_preflight() -> Dict[str, Any]:
                 "--set-env-vars PROJECT_ID=<your-project>.",
             )
         )
+        checks.append(_billing_check())
         checks.append(_notification_check())
         return _summarise(checks, sa_email)
 
@@ -184,10 +185,12 @@ def run_preflight() -> Dict[str, Any]:
                     "'gcloud auth application-default login'.",
                 )
             )
+            checks.append(_billing_check())
             checks.append(_notification_check())
             return _summarise(checks, sa_email)
 
     if settings.MOCK_MODE:
+        checks.append(_billing_check())
         checks.append(_notification_check())
         return _summarise(checks, sa_email)
 
@@ -304,6 +307,7 @@ def run_preflight() -> Dict[str, Any]:
         wrong_api = _uses_a_different_api(settings.GEMINI_MODEL)
         if wrong_api:
             checks.append(wrong_api)
+            checks.append(_billing_check())
             checks.append(_notification_check())
             return _summarise(checks, sa_email)
         try:
@@ -326,8 +330,46 @@ def run_preflight() -> Dict[str, Any]:
             )
         )
 
+    checks.append(_billing_check())
     checks.append(_notification_check())
     return _summarise(checks, sa_email)
+
+
+def _billing_check() -> Dict[str, str]:
+    """Whether costs are estimated or reconciled against the invoice.
+
+    Estimating is the honest default and works with nothing set up, so an
+    unconfigured export is a note rather than a warning. But a FinOps agent
+    claiming savings against a number finance has never seen is the first thing
+    a reviewer will challenge, and this says which one you are looking at.
+    """
+    from app.tools import gcp_billing
+
+    if not gcp_billing.is_configured():
+        return _check(
+            "Cost source", SKIP,
+            "Costs are estimated from the allocation; no billing export configured.",
+            "Set BILLING_EXPORT_TABLE to reconcile against what Google actually charged.",
+        )
+    if settings.MOCK_MODE:
+        return _check("Cost source", SKIP, "MOCK_MODE is on; the export is not queried.")
+
+    try:
+        billed = gcp_billing.fetch_billed_costs()
+    except Exception as exc:  # pragma: no cover - defensive
+        return _check("Cost source", FAIL, str(exc)[:160])
+
+    if billed is None:
+        return _check(
+            "Cost source", FAIL,
+            f"Could not read {settings.BILLING_EXPORT_TABLE}.",
+            "Grant roles/bigquery.jobUser and roles/bigquery.dataViewer, and check "
+            "the table name.",
+        )
+    return _check(
+        "Cost source", OK,
+        f"Reconciled against the billing export: {len(billed)} attributed resource(s).",
+    )
 
 
 def _notification_check() -> Dict[str, str]:

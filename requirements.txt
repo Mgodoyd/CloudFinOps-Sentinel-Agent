@@ -19,6 +19,8 @@ google-cloud-firestore>=2.19
 google-cloud-resource-manager>=1.13
 google-cloud-compute>=1.19
 google-cloud-artifact-registry>=1.11
+# Reads the Cloud Billing export; only used when BILLING_EXPORT_TABLE is set.
+google-cloud-bigquery>=3.25
 
 # --- Observability ---
 opentelemetry-sdk>=1.27
