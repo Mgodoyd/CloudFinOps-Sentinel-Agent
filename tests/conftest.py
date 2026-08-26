@@ -17,6 +17,14 @@ os.environ["OTEL_ENABLED"] = "false"
 os.environ["STATE_BACKEND"] = "file"
 os.environ["DASHBOARD_TOKEN"] = "test-token"
 os.environ["STATE_FILE"] = os.path.join(tempfile.mkdtemp(), "memory_bank.json")
+# Notification channels are read from .env like everything else, so an operator
+# with a real bot token configured would have the suite deliver test tickets to
+# their actual chat. Cleared explicitly: the tests that need a channel set one
+# themselves.
+os.environ["SLACK_WEBHOOK_URL"] = ""
+os.environ["TELEGRAM_BOT_TOKEN"] = ""
+os.environ["TELEGRAM_CHAT_ID"] = ""
+os.environ["DASHBOARD_URL"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 

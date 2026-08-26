@@ -138,6 +138,14 @@ def _escape(text: str) -> str:
     )
 
 
+# httpx logs every request at INFO with the full URL. Telegram puts the bot
+# token *in the path*, so that line publishes the credential straight into
+# Cloud Logging, where anyone with a log viewer role can read it. Slack webhook
+# URLs are secrets in the same way. The request is already traced and logged
+# here without the URL, so nothing is lost by silencing it.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
 def _post(url: str, payload: Dict[str, Any], channel: str) -> bool:
     import httpx
 

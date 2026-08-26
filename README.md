@@ -346,6 +346,9 @@ curl -H "Authorization: Bearer $DASHBOARD_TOKEN" localhost:8080/api/preflight
 
 Preflight warns when no channel is configured, because a scheduled run raising
 a ticket at 3am into an empty room looks exactly like a run that found nothing.
+It is also the fastest way to catch the one mistake that actually bites here:
+configuration is read once at startup, so a `.env` edited while the service is
+running changes nothing until it restarts.
 
 Delivery is visible where every other action is — on the trace:
 
@@ -518,7 +521,7 @@ MOCK_MODE=true DASHBOARD_TOKEN=dev-token \
 
 Open <http://localhost:8080> and unlock it with `dev-token`. Press **RUN AUDIT**.
 
-Run the tests with `pytest` — **348 pass, 2 skip** (the two need the
+Run the tests with `pytest` — **349 pass, 2 skip** (the two need the
 OpenTelemetry exporter), no credentials needed.
 
 ### Point it at a real GCP project
@@ -810,7 +813,7 @@ human-facing `verdict` is localised.
 pytest
 ```
 
-350 tests — 348 pass and 2 skip where the OpenTelemetry exporter is
+351 tests — 349 pass and 2 skip where the OpenTelemetry exporter is
 unavailable — covering the memory bank, cost math, the autonomy matrix, the DRY_RUN
 safety gate, tool serialization, LLM analysis and failure handling, model
 fallbacks, action dispatch per resource type, the real-data guarantees, the
@@ -855,7 +858,7 @@ app/
     static/js/i18n.js     UI string catalogue (en/es)
 deploy/                   One-command Cloud Run deploy + Cloud Scheduler
 docs/                     Architecture notes, diagrams and screenshots
-tests/                    350 tests, no credentials needed
+tests/                    351 tests, no credentials needed
 ```
 
 ## Known limitations

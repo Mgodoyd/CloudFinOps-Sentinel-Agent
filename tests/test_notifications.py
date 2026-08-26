@@ -264,3 +264,15 @@ def test_preflight_names_the_configured_channels(telegram):
     check = [c for c in run_preflight()["checks"] if c["name"] == "Notifications"][0]
     assert check["status"] == "ok"
     assert "telegram" in check["detail"]
+
+
+def test_the_bot_token_never_reaches_the_logs(telegram, post, caplog):
+    """Telegram puts the token in the URL path and httpx logs URLs at INFO, so
+    an unguarded request publishes the credential into Cloud Logging."""
+    import logging
+
+    with caplog.at_level(logging.INFO):
+        notifications.send_approval_request(TICKET)
+
+    assert "12345:AAtoken" not in caplog.text
+    assert logging.getLogger("httpx").level >= logging.WARNING
