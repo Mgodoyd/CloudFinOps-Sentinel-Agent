@@ -19,6 +19,10 @@ Built on **Gemini 3.5 Flash-Lite** through the **GenAI SDK**, running on
 > Gemini 3.5 Flash-Lite and Gemma 4 through the **GenAI SDK**, on **Cloud Run**
 > with **Firestore**, **Cloud Scheduler**, **Secret Manager**, **BigQuery** and
 > **Cloud Trace**.
+>
+> [**docs/HACKATHON.md**](docs/HACKATHON.md) maps every requirement and judging
+> criterion to where this project answers it, and carries the findings and
+> learnings.
 
 ---
 
