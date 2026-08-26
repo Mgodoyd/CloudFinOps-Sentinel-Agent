@@ -331,7 +331,11 @@ def _build_state(lang: str = DEFAULT_LANG) -> Dict[str, Any]:
         "charts": build_charts(resources, store["remediations"], inventory),
         "data_source": data_source,
         "agent_mode": "gemini" if agent.is_live else "heuristic",
-        "model": agent.model_name if agent.is_live else None,
+        # The model that actually answered, not the one that was configured.
+        # After a fallback these differ, and the header claiming Gemini while
+        # Gemma wrote the analysis is the kind of small lie that makes an
+        # operator stop trusting the rest of the panel.
+        "model": (analysis.get("model") or agent.model_name) if agent.is_live else None,
         "backend": agent.backend,
         "project_id": settings.PROJECT_ID,
         "region": settings.REGION,

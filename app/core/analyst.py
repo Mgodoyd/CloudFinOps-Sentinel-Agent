@@ -116,6 +116,48 @@ def _facts(resource: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+SUMMARY_INSTRUCTION = """
+You are a Google Cloud FinOps analyst. Given measured facts about a fleet,
+write ONE short paragraph (max 60 words) saying where the money is going and
+what to do first. The measurements are authoritative: never contradict or
+invent them. No preamble, no lists, no headings.
+"""
+
+
+def summarise_fleet(client: Any, model: str, resources: List[Dict[str, Any]]) -> Optional[str]:
+    """One paragraph on the whole estate, or None.
+
+    Deliberately narrower than `FleetAnalyst.analyse`. This is the second-tier
+    path, served by Gemma, and the width is a measured constraint rather than a
+    preference: asked for the full per-resource schema Gemma does not return
+    inside a usable deadline, while the same fleet summarised in a paragraph
+    comes back in under half a minute. Asking a model for work it cannot deliver
+    in time is a slower way of getting nothing.
+    """
+    if not client or not resources:
+        return None
+
+    from google.genai import types
+
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents="Summarise this fleet:\n"
+            + json.dumps({"resources": [_facts(r) for r in resources]}),
+            config=types.GenerateContentConfig(
+                system_instruction=SUMMARY_INSTRUCTION,
+                temperature=0.2,
+                http_options=types.HttpOptions(timeout=50_000),
+            ),
+        )
+    except Exception as exc:
+        logger.warning("Fleet summary unavailable: %s: %s", type(exc).__name__, str(exc)[:160])
+        return None
+
+    text = (response.text or "").strip()
+    return text or None
+
+
 class FleetAnalyst:
     """Wraps one structured Gemini call over the whole fleet."""
 

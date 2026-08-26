@@ -13,7 +13,13 @@ from typing import Any, Dict, List, Optional
 from app.core.config import settings
 from app.core import telemetry
 from app.core.trace import ANALYSIS, DECISION, PLANNING, tracer
-from app.core.analyst import FleetAnalyst, clear_analysis, last_analysis, store_analysis
+from app.core.analyst import (
+    FleetAnalyst,
+    clear_analysis,
+    last_analysis,
+    store_analysis,
+    summarise_fleet,
+)
 from app.core.executor import PlanExecutor
 from app.core.planner import MAX_REPLANS, Planner
 from app.core.prompts import AUDIT_PROMPT_TEMPLATE, SYSTEM_INSTRUCTION
@@ -327,6 +333,45 @@ class CloudFinOpsAgent:
             )
         return raised
 
+    def _summarise_with_gemma(
+        self, fleet: List[Dict[str, Any]]
+    ) -> Optional[str]:
+        """Second tier: Gemma writes the fleet summary when Gemini will not.
+
+        Gemini going down is usually quota or capacity, and both are per-model,
+        so a different model is a real second chance rather than a retry of the
+        same failure. Gemma is served by the same API and the same SDK — this is
+        a model name, not a second integration.
+
+        It is deliberately given the *narrow* job. Measured against this fleet,
+        Gemma cannot return the analyst's per-resource schema inside a usable
+        deadline, but summarises the same estate in around twenty seconds. So
+        the per-resource judgement degrades to the deterministic rules, which
+        were always going to run anyway, and what the second tier buys back is
+        the narrative the report would otherwise lose entirely.
+        """
+        if not self.client or not settings.GEMMA_MODEL:
+            return None
+
+        with telemetry.span(
+            "agent.summarise.fallback",
+            **{"gen_ai.system": "gemma", "gen_ai.request.model": settings.GEMMA_MODEL,
+               "agent.resources": len(fleet)},
+        ), tracer.timed(
+            ANALYSIS, f"Gemini unavailable — {settings.GEMMA_MODEL} summarising the fleet"
+        ) as step:
+            step.add(request={"model": settings.GEMMA_MODEL, "resources": len(fleet),
+                              "scope": "fleet summary only",
+                              "reason": "primary model returned no analysis"})
+            summary = summarise_fleet(self.client, settings.GEMMA_MODEL, fleet)
+            step.add(response={"available": summary is not None,
+                               "summary": summary})
+
+        if summary is None:
+            tracer.step(ANALYSIS, "Gemma unavailable too — deterministic rules only",
+                        status="warn")
+        return summary
+
     def _plan_and_execute(
         self, data: Dict[str, Any], analysis: Dict[str, Any], fleet: List[Dict[str, Any]]
     ) -> Optional[str]:
@@ -335,7 +380,10 @@ class CloudFinOpsAgent:
         Returns None if planning is unavailable, so the caller can fall back to
         acting directly on the analysis.
         """
-        planner = Planner(self.client, self.model_name)
+        # Whichever model produced the analysis also plans from it. If Gemini
+        # was down and Gemma answered, planning with Gemini would fail on the
+        # same outage and cost the run its plan.
+        planner = Planner(self.client, analysis.get("model") or self.model_name)
         handled = [r["resource_id"] for r in memory_bank.snapshot()["remediations"]]
 
         with telemetry.span(
@@ -686,18 +734,32 @@ class CloudFinOpsAgent:
                     "analysed": len(analysis["by_resource"]) if analysis else 0,
                     "available": analysis is not None,
                 })
-            store_analysis(analysis)
+
             if analysis:
+                store_analysis(analysis)
                 tracer.step(
                     ANALYSIS, f"Fleet verdict from {analysis['model']}",
                     detail={"summary": analysis["summary"],
                             "per_resource": analysis["by_resource"]},
                 )
             else:
-                tracer.step(
-                    ANALYSIS, "LLM analysis unavailable — deterministic rules only",
-                    status="warn",
-                )
+                # `analysis` stays None on purpose: an empty by_resource must
+                # not send the run down the planning path, which would spend a
+                # second timeout discovering there is nothing to plan from.
+                gemma_summary = self._summarise_with_gemma(fleet)
+                if gemma_summary:
+                    store_analysis({"by_resource": {}, "summary": gemma_summary,
+                                    "model": settings.GEMMA_MODEL})
+                    tracer.step(
+                        ANALYSIS, f"Fleet summary from {settings.GEMMA_MODEL}",
+                        detail={"summary": gemma_summary,
+                                "per_resource": "deterministic rules"},
+                    )
+                else:
+                    tracer.step(
+                        ANALYSIS, "LLM analysis unavailable — deterministic rules only",
+                        status="warn",
+                    )
 
         anomaly_count = len(data.get("idle_services", []))
 

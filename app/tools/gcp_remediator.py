@@ -298,6 +298,16 @@ def request_human_approval(
         }
     )
     logger.info("Approval ticket %s created for %s", ticket["ticket_id"], resource_id)
+
+    # Go and find a person. The ticket is already persisted, so a channel that
+    # is down loses the message, never the finding.
+    from app.tools import notifications
+    from app.tools.memory_tools import render_approval
+
+    # Rendered, so the message carries the same headline the approver sees —
+    # catalogue prose plus the target shape — not the raw stored fields.
+    notifications.notify_approval(render_approval(ticket))
+
     return f"PENDING_APPROVAL: ticket {ticket['ticket_id']} created for {resource_id}."
 
 

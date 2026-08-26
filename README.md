@@ -317,8 +317,33 @@ command is: it is a technical value, not a sentence. The model's own wording is
 kept on the ticket and shown in the reasoning drawer, where it explains the
 change rather than promising one.
 
-A rejection is remembered. `last_rejection()` is checked before any action, so a
-change a human has already declined is never proposed again — that repetition is
+### The ticket goes and finds a person
+
+The agent runs hourly while nobody is watching. A ticket that only exists in a
+dashboard nobody has open is a human-in-the-loop that depends on someone walking
+past it, so a raised ticket is pushed to **Slack** and **Telegram**:
+
+```bash
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+TELEGRAM_BOT_TOKEN=123456:AA...   TELEGRAM_CHAT_ID=-100...
+DASHBOARD_URL=https://cloudfinops-sentinel-....run.app
+```
+
+The message carries the money, the resource, and **the target shape that will
+be applied** — the same contract the approver sees in the deck — plus a link
+back into it.
+
+Every channel is optional and every one degrades quietly. An unconfigured
+channel is skipped rather than reported as a failure; a channel that is down is
+logged and stepped over. The ticket is persisted *before* anyone is told, so a
+dead webhook costs the notification and never the finding. Delivery runs off the
+audit's thread for the same reason: a webhook that takes ten seconds must not
+add ten seconds to the audit.
+
+### Rejections are remembered
+
+`last_rejection()` is checked before any action, so a change a human has already
+declined is never proposed again — that repetition is
 exactly the alert fatigue the savings threshold exists to prevent.
 
 The Memory Bank also records the *shape* a resource had when it was acted on,
@@ -468,7 +493,7 @@ MOCK_MODE=true DASHBOARD_TOKEN=dev-token \
 
 Open <http://localhost:8080> and unlock it with `dev-token`. Press **RUN AUDIT**.
 
-Run the tests with `pytest` — **305 pass, 2 skip** (the two need the
+Run the tests with `pytest` — **343 pass, 2 skip** (the two need the
 OpenTelemetry exporter), no credentials needed.
 
 ### Point it at a real GCP project
@@ -551,6 +576,13 @@ to `firestore`, `file` or `none` to override.
 If Firestore is unreachable the agent starts anyway and says so: an agent that
 cannot read its history is still more useful than one that will not boot.
 
+The property this rests on is covered directly: a test builds a memory bank,
+records a remediation, discards the process the way a new Cloud Run revision
+does, and asserts the next one still knows what was already fixed and what a
+human already rejected. Without it the agent re-proposes what it remediated and
+re-raises what was declined — a failure that never errors, it just quietly
+forgets.
+
 ---
 
 ## Configuration
@@ -576,6 +608,10 @@ resolve through Application Default Credentials on Cloud Run.
 | `STATE_BACKEND` | `auto` | `firestore` on Cloud Run, `file` locally |
 | `DASHBOARD_TOKEN` | *(generated locally)* | **Required.** Unlocks the dashboard and API |
 | `WEBHOOK_TOKEN` | *(falls back to dashboard)* | Separate credential for Cloud Scheduler |
+| `GEMMA_MODEL` | `gemma-4-31b-it` | Second-tier model; empty disables the tier |
+| `SLACK_WEBHOOK_URL` | *(empty)* | Push approval tickets to Slack |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | *(empty)* | Push approval tickets to Telegram |
+| `DASHBOARD_URL` | *(empty)* | Link back into the deck from a notification |
 | `OTEL_ENABLED` | `true` | Export OpenTelemetry spans to Cloud Trace |
 | `MOCK_MODE` | `false` | Skip GCP entirely and use simulated infrastructure |
 | `SCAN_REGIONS` | `auto` | Regions to scan, or a comma-separated list |
@@ -631,9 +667,44 @@ detection, cost math, the autonomy matrix, the memory bank — is deterministic
 and always runs. When Gemini is unavailable the agent finishes heuristically and
 says so, rather than losing the cycle:
 
+### Degradation has three steps, not two
+
+```
+Gemini   →  per-resource judgement + fleet summary
+Gemma    →  deterministic findings + a real fleet summary
+neither  →  deterministic findings, no narrative
+```
+
+**Gemma is the second tier.** Gemini going down is usually quota or capacity,
+and both are per-model, so a different model is a real second chance rather than
+a retry of the same failure. Gemma is served by the same API and the same SDK —
+this is a model name, not a second integration.
+
+It is deliberately given a *narrower* job, and the narrowness is measured rather
+than stylistic. Against the six-service demo fleet:
+
+| Asked for | Result |
+|---|---|
+| The analyst's full per-resource schema, one resource | timed out past 100 s |
+| The same, no schema, one resource | 50 s |
+| The same, no schema, six resources | `504 DEADLINE_EXCEEDED` |
+| **A one-paragraph fleet summary, six resources** | **~18 s** |
+
+So Gemma writes the summary and the per-resource judgement falls back to the
+deterministic rules, which were always going to run anyway. What the second tier
+buys back is the narrative the report would otherwise lose entirely. Asking a
+model for work it cannot deliver inside the deadline is a slower way of getting
+nothing.
+
+The header names the model that actually answered — `ENGINE: gemma-4-31b-it` —
+because claiming Gemini while Gemma wrote the summary is the kind of small lie
+that makes an operator stop trusting the rest of the panel. Set `GEMMA_MODEL=`
+to empty to disable the tier.
+
 | Failure | Behaviour |
 |---|---|
 | No API key configured | Heuristic audit, `ENGINE: HEURISTIC` in the header |
+| Gemini unreachable, Gemma up | Deterministic findings + a Gemma fleet summary |
 | 429 quota exhausted | Heuristic fallback + retry-delay hint |
 | 503 on every candidate model | Heuristic fallback, findings unaffected |
 | Model not found (404) | Falls through `MODEL_FALLBACKS` automatically |
@@ -714,13 +785,14 @@ human-facing `verdict` is localised.
 pytest
 ```
 
-307 tests — 305 pass and 2 skip where the OpenTelemetry exporter is
+345 tests — 343 pass and 2 skip where the OpenTelemetry exporter is
 unavailable — covering the memory bank, cost math, the autonomy matrix, the DRY_RUN
 safety gate, tool serialization, LLM analysis and failure handling, model
 fallbacks, action dispatch per resource type, the real-data guarantees, the
 rationale engine, translation completeness, the execution trace, scan history,
 lazy startup, preflight, the approval-to-execution contract, simulated /
-real isolation and the API —
+real isolation, the Firestore backend, the Gemma tier, outbound
+notifications and the API —
 all against simulated infrastructure with
 writes disabled, no credentials required.
 
@@ -750,6 +822,7 @@ app/
     rationale.py          Evidence, rules, sizing and the autonomy explanation
     preflight.py          Readiness diagnostics ("what do I still need?")
     memory_tools.py       Persistent memory bank (approvals, history, events)
+    notifications.py      Approval tickets pushed to Slack / Telegram
     state_store.py        Firestore / file / in-memory persistence backends
   web/
     index.html            Command deck
@@ -757,7 +830,7 @@ app/
     static/js/i18n.js     UI string catalogue (en/es)
 deploy/                   One-command Cloud Run deploy + Cloud Scheduler
 docs/                     Architecture notes, diagrams and screenshots
-tests/                    307 tests, no credentials needed
+tests/                    345 tests, no credentials needed
 ```
 
 ## Known limitations

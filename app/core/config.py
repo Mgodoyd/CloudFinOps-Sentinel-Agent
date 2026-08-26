@@ -94,6 +94,26 @@ class Settings(BaseSettings):
     # and the Gemini free tier allows only 5 per minute.
     MAX_TOOL_CALLS: int = 4
 
+    # --- Second-tier model ------------------------------------------------
+    # Gemma answers when Gemini does not. It is served by the same API and the
+    # same SDK, so this is a model name and not a second integration. Degrading
+    # to Gemma keeps a real analysis in the report where the deterministic rules
+    # alone would have produced none. Empty disables the tier.
+    # 31b measured faster than 26b on this workload, counterintuitively.
+    GEMMA_MODEL: str = "gemma-4-31b-it"
+
+    # --- Outbound notifications -------------------------------------------
+    # The agent runs while nobody is watching. A ticket nobody is told about is
+    # a human-in-the-loop that depends on someone happening to open a dashboard.
+    # Every one of these is optional and absent means that channel is skipped.
+    SLACK_WEBHOOK_URL: str = ""
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+    # Used to build the link back into the deck. On Cloud Run, set it to the
+    # service URL; empty just omits the link.
+    DASHBOARD_URL: str = ""
+    NOTIFY_TIMEOUT: float = 5.0
+
     # --- Agent behaviour --------------------------------------------------
     METRICS_CACHE_TTL: int = 60
     MEMORY_ANOMALY_THRESHOLD_GIB: float = 1.0
