@@ -403,6 +403,13 @@ The product never presents invented infrastructure as real:
   "nothing found".
 - **Utilization is labelled.** `MONITORING` when it came from Cloud Monitoring,
   `MODELLED` when the metric was unavailable.
+- **The two worlds never mix.** The on-ramp above is to run the simulated fleet
+  first and point the agent at a real project afterwards. An approval ticket
+  outlives the audit that raised it, so the demo fleet gets its own memory bank
+  (`data/memory_bank.mock.json`), and every ticket records which world raised
+  it. Approving a demo service against a live project is refused rather than
+  attempted — otherwise the agent tries to resize a service that never existed
+  and the operator sees a bare `404 ... does not exist`.
 
 ### Nothing runs until you ask
 
@@ -461,7 +468,7 @@ MOCK_MODE=true DASHBOARD_TOKEN=dev-token \
 
 Open <http://localhost:8080> and unlock it with `dev-token`. Press **RUN AUDIT**.
 
-Run the tests with `pytest` — **298 pass, 2 skip** (the two need the
+Run the tests with `pytest` — **305 pass, 2 skip** (the two need the
 OpenTelemetry exporter), no credentials needed.
 
 ### Point it at a real GCP project
@@ -707,12 +714,13 @@ human-facing `verdict` is localised.
 pytest
 ```
 
-300 tests — 298 pass and 2 skip where the OpenTelemetry exporter is
+307 tests — 305 pass and 2 skip where the OpenTelemetry exporter is
 unavailable — covering the memory bank, cost math, the autonomy matrix, the DRY_RUN
 safety gate, tool serialization, LLM analysis and failure handling, model
 fallbacks, action dispatch per resource type, the real-data guarantees, the
 rationale engine, translation completeness, the execution trace, scan history,
-lazy startup, preflight, the approval-to-execution contract and the API —
+lazy startup, preflight, the approval-to-execution contract, simulated /
+real isolation and the API —
 all against simulated infrastructure with
 writes disabled, no credentials required.
 
@@ -749,7 +757,7 @@ app/
     static/js/i18n.js     UI string catalogue (en/es)
 deploy/                   One-command Cloud Run deploy + Cloud Scheduler
 docs/                     Architecture notes, diagrams and screenshots
-tests/                    300 tests, no credentials needed
+tests/                    307 tests, no credentials needed
 ```
 
 ## Known limitations

@@ -150,6 +150,20 @@ class Settings(BaseSettings):
     )
 
     @property
+    def state_file(self) -> str:
+        """Where the memory bank lives, kept apart per world.
+
+        The documented way to try this project is to run the simulated fleet
+        first and point it at a real project afterwards. Sharing one file across
+        that switch leaves demo services queued for a live resize, so simulated
+        runs get their own file unless the operator named one explicitly.
+        """
+        if not self.MOCK_MODE or "STATE_FILE" in os.environ:
+            return self.STATE_FILE
+        base, ext = os.path.splitext(self.STATE_FILE)
+        return f"{base}.mock{ext or '.json'}"
+
+    @property
     def writes_enabled(self) -> bool:
         return not self.DRY_RUN and not self.MOCK_MODE
 

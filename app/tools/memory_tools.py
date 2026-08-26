@@ -36,7 +36,7 @@ _USE_SETTINGS = object()
 class MemoryBank:
     def __init__(self, state_file: Any = _USE_SETTINGS, backend: Optional[str] = None):
         self._lock = threading.RLock()
-        self.state_file = settings.STATE_FILE if state_file is _USE_SETTINGS else state_file
+        self.state_file = settings.state_file if state_file is _USE_SETTINGS else state_file
         self.store = build_store(
             backend or ("none" if self.state_file is None else settings.STATE_BACKEND),
             settings.PROJECT_ID,
@@ -198,6 +198,11 @@ class MemoryBank:
         ticket.setdefault("status", "PENDING")
         ticket.setdefault("created_at", utcnow())
         ticket.setdefault("run_id", self.current_run_id)
+        # Which world this was raised against. A ticket outlives the audit that
+        # raised it, and the documented way to try this project is to run the
+        # simulated fleet first and point it at a real project afterwards — at
+        # which point a demo service must not be resized against live GCP.
+        ticket.setdefault("data_source", "simulated" if settings.MOCK_MODE else "gcp")
         with self._lock:
             self.data["approvals"].append(ticket)
             self._persist()

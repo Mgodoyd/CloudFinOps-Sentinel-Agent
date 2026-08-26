@@ -311,6 +311,24 @@ def execute_approved_action(resource_id: str) -> str:
     if not approval:
         return f"No approved action found for {resource_id}."
 
+    # A ticket raised against the simulated fleet must never be executed against
+    # a real project, and vice versa. Without this the documented "try it with
+    # MOCK_MODE=true first" path leaves demo services queued for a live resize,
+    # which fails as a 404 against a resource that never existed.
+    raised_against = approval.get("data_source")
+    now = "simulated" if settings.MOCK_MODE else "gcp"
+    if raised_against and raised_against != now:
+        message = (
+            f"REFUSED: the ticket for {resource_id} was raised against "
+            f"{'simulated infrastructure' if raised_against == 'simulated' else 'a real project'}, "
+            f"but the agent is now reading {'simulated infrastructure' if now == 'simulated' else 'a real project'}. "
+            "Clear it with POST /api/reset, or restore the mode it was raised in."
+        )
+        logger.warning(message)
+        tracer.step(EXECUTION, message, status=WARN, resource_id=resource_id,
+                    detail={"raised_against": raised_against, "current": now})
+        return message
+
     action_type = approval.get("action_type") or "resize_service"
     params = approval.get("action_params") or {}
 
