@@ -27,7 +27,13 @@ gcloud services enable \
   firestore.googleapis.com monitoring.googleapis.com compute.googleapis.com \
   cloudscheduler.googleapis.com secretmanager.googleapis.com \
   cloudtrace.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  bigquery.googleapis.com \
   --project="$PROJECT"
+# cloudresourcemanager is what add-iam-policy-binding calls. Disabled, every
+# grant below fails with a 403 that reads like a permissions problem on the
+# service account rather than a missing API — and the roles silently never
+# land. bigquery is needed to read the billing export.
 
 echo "▸ Service account"
 gcloud iam service-accounts create "$SA_NAME" \
@@ -45,9 +51,17 @@ for ROLE in \
   roles/aiplatform.user \
   roles/bigquery.jobUser roles/bigquery.dataViewer
 do
-  gcloud projects add-iam-policy-binding "$PROJECT" \
-    --member="serviceAccount:${SA}" --role="$ROLE" --condition=None --quiet >/dev/null
-  echo "   granted $ROLE"
+  # Not silenced: a grant that fails must say so. Hiding stdout hid the 403
+  # that told us the Resource Manager API was off, and left the deploy looking
+  # like it had granted roles it never granted.
+  if gcloud projects add-iam-policy-binding "$PROJECT" \
+       --member="serviceAccount:${SA}" --role="$ROLE" --condition=None --quiet >/dev/null
+  then
+    echo "   granted $ROLE"
+  else
+    echo "   FAILED to grant $ROLE — the agent will not work without it" >&2
+    exit 1
+  fi
 done
 
 echo "▸ Firestore (skipped if it already exists)"

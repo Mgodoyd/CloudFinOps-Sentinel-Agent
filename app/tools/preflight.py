@@ -130,7 +130,13 @@ def _classify(exc: Exception, api: str, permission: str) -> Dict[str, str]:
     if "403" in text or "PermissionDenied" in type(exc).__name__:
         return {
             "detail": f"The service account lacks '{permission}'.",
+            # cloudresourcemanager is what add-iam-policy-binding calls. If it is
+            # disabled the grant returns its own 403, which reads like the role
+            # was refused rather than never attempted — so enabling it is part
+            # of the fix, not a separate discovery.
             "fix": (
+                f"gcloud services enable cloudresourcemanager.googleapis.com "
+                f"--project={settings.PROJECT_ID}\n"
                 f"gcloud projects add-iam-policy-binding {settings.PROJECT_ID} \\\n"
                 f"  --member=serviceAccount:{_SA_EMAIL} --role=<ROLE>"
             ),
