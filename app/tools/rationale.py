@@ -240,7 +240,12 @@ def build_evidence(resource: Dict[str, Any], lang: str = DEFAULT_LANG) -> List[D
         # The estimate prices the allocation; this is the invoice, and a gap
         # between them is information rather than a discrepancy to hide.
         *([{
-            "label": t(lang, "ev.billed_cost", days=resource["billing"]["window_days"]),
+            "label": t(
+                lang,
+                "ev.billed_partial" if resource["billing"].get("partial")
+                else "ev.billed_cost",
+                days=resource["billing"]["window_days"],
+            ),
             "value": f"${resource['billing']['billed_monthly']:.2f}",
             "source": t(lang, "src.billing_export"),
         }] if resource.get("billing") else []),

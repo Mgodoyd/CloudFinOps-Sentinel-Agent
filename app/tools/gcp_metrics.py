@@ -98,7 +98,7 @@ _services_cache = _TTLCache(settings.METRICS_CACHE_TTL)
 _billing_cache = _TTLCache(3600)
 
 
-def billed_costs(allow_discovery: bool = True) -> Optional[Dict[str, float]]:
+def billed_costs(allow_discovery: bool = True) -> Optional[Dict[str, Any]]:
     """What Google charged per resource, or None when the export is not set up."""
     from app.tools import gcp_billing
 

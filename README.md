@@ -272,6 +272,14 @@ estimate usually means a scale-to-zero service really is idle most of the time,
 so the estimate was a ceiling. Billed *over* usually means egress, CPU boost or
 per-request charges the allocation model does not price at all.
 
+The billed figure is scaled by **the days the rows actually span**, not by the
+window that was asked for. The export does not backfill, so a freshly enabled
+one holds a day or two — scaling that as if it were thirty days would report a
+thirtieth of the real bill next to the estimate, which reads as the cost model
+being wildly wrong rather than the data being young. Under three days the row is
+labelled *partial*, because a projection from one day of charges is arithmetic
+rather than evidence.
+
 It is off by default and degrades to the estimate alone: the export takes a day
 to start producing rows, costs money to query, and a demo has to run without it.
 Absence is kept honest — a resource the export cannot attribute shows nothing
@@ -949,7 +957,7 @@ human-facing `verdict` is localised.
 pytest
 ```
 
-392 tests — 390 pass and 2 skip where the OpenTelemetry exporter is
+396 tests — 394 pass and 2 skip where the OpenTelemetry exporter is
 unavailable — covering the memory bank, cost math, the autonomy matrix, the DRY_RUN
 safety gate, tool serialization, LLM analysis and failure handling, model
 fallbacks, action dispatch per resource type, the real-data guarantees, the
@@ -997,7 +1005,7 @@ app/
     static/js/i18n.js     UI string catalogue (en/es)
 deploy/                   One-command Cloud Run deploy + Cloud Scheduler
 docs/                     Architecture notes, diagrams and screenshots
-tests/                    392 tests, no credentials needed
+tests/                    396 tests, no credentials needed
 ```
 
 ## Known limitations

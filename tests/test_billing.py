@@ -76,27 +76,30 @@ def test_none_and_empty_are_different_answers():
     """None is 'we could not look'; {} is 'we looked and there was nothing'.
     Only the first may make the UI stop showing billed figures."""
     assert gcp_billing.reconcile(RESOURCE, None) is None
-    assert gcp_billing.reconcile(RESOURCE, {}) is None
+    assert gcp_billing.reconcile(RESOURCE, {"costs": {}, "days_covered": 30}) is None
 
 
 def test_an_unattributed_resource_shows_nothing_rather_than_zero(monkeypatch, configured):
     """Not every charge carries a label the export can map to a service.
     Reporting $0.00 there would claim the resource is free."""
-    assert gcp_billing.reconcile(RESOURCE, {"other-service": 12.0}) is None
+    assert gcp_billing.reconcile(
+        RESOURCE, {"costs": {"other-service": 12.0}, "days_covered": 30}
+    ) is None
 
 
 # --- 2. reading the export -------------------------------------------------
 def test_credits_are_netted_off(monkeypatch, configured):
     """Credits are negative amounts in the export; ignoring them overstates
     the bill, which for a savings agent is the flattering direction."""
-    use(monkeypatch, FakeBQ(rows=[FakeRow(resource_id="checkout-api",
-                                          cost=200.0, credits=-50.0)]))
-    assert gcp_billing.fetch_billed_costs() == {"checkout-api": 150.0}
+    use(monkeypatch, FakeBQ(rows=[FakeRow(resource_id="checkout-api", cost=200.0, credits=-50.0,
+                                          window_start=None, window_end=None)]))
+    assert gcp_billing.fetch_billed_costs()["costs"] == {"checkout-api": 150.0}
 
 
 def test_a_missing_credit_column_is_not_a_crash(monkeypatch, configured):
-    use(monkeypatch, FakeBQ(rows=[FakeRow(resource_id="a", cost=10.0, credits=None)]))
-    assert gcp_billing.fetch_billed_costs() == {"a": 10.0}
+    use(monkeypatch, FakeBQ(rows=[FakeRow(resource_id="a", cost=10.0, credits=None,
+                                          window_start=None, window_end=None)]))
+    assert gcp_billing.fetch_billed_costs()["costs"] == {"a": 10.0}
 
 
 def test_the_query_is_bounded_by_bytes_and_project(monkeypatch, configured):
@@ -121,7 +124,9 @@ def test_the_window_is_normalised_to_a_month(monkeypatch):
 
 def test_billed_under_estimate_is_reported_as_a_negative_delta(monkeypatch):
     monkeypatch.setattr(settings, "BILLING_LOOKBACK_DAYS", 30)
-    result = gcp_billing.reconcile(RESOURCE, {"checkout-api": 198.11})
+    result = gcp_billing.reconcile(
+        RESOURCE, {"costs": {"checkout-api": 198.11}, "days_covered": 30}
+    )
 
     assert result["billed_monthly"] == 198.11
     assert result["estimated_monthly"] == 304.84
@@ -136,7 +141,9 @@ def test_billed_over_estimate_is_reported_too(monkeypatch):
     """Egress, CPU boost and per-request charges are not priced by the
     allocation model at all, so the invoice can exceed the estimate."""
     monkeypatch.setattr(settings, "BILLING_LOOKBACK_DAYS", 30)
-    assert gcp_billing.reconcile(RESOURCE, {"checkout-api": 420.0})["delta"] == 115.16
+    assert gcp_billing.reconcile(
+        RESOURCE, {"costs": {"checkout-api": 420.0}, "days_covered": 30}
+    )["delta"] == 115.16
 
 
 # --- 4. it never runs where it should not ----------------------------------
@@ -144,7 +151,8 @@ def test_mock_mode_never_queries_billing(monkeypatch):
     """A simulated fleet has no invoice, and a demo must not spend money."""
     monkeypatch.setattr(settings, "BILLING_EXPORT_TABLE", "p.ds.t")
     monkeypatch.setattr(settings, "MOCK_MODE", True)
-    fake = use(monkeypatch, FakeBQ(rows=[FakeRow(resource_id="a", cost=1.0, credits=0)]))
+    fake = use(monkeypatch, FakeBQ(rows=[FakeRow(resource_id="a", cost=1.0, credits=0,
+                                    window_start=None, window_end=None)]))
 
     from app.tools.gcp_metrics import billed_costs
 
@@ -170,3 +178,47 @@ def test_the_suite_never_inherits_a_real_billing_table():
     cannot quietly be dropped.
     """
     assert settings.BILLING_EXPORT_TABLE == ""
+
+
+# --- 5. a young export must not be read as a month -------------------------
+def test_a_days_old_export_is_scaled_by_what_it_actually_covers():
+    """The export does not backfill. A day after enabling it holds a day.
+
+    Scaling that by the configured 30-day window would report a thirtieth of the
+    real bill next to the estimate — which reads as the cost model being wildly
+    wrong, rather than the data being young.
+    """
+    result = gcp_billing.reconcile(
+        {"resource_id": "a", "monthly_cost": 304.84},
+        {"costs": {"a": 10.0}, "days_covered": 1.0},
+    )
+    assert result["billed_monthly"] == 300.0, "10/day is ~300/month, not ~10"
+    assert result["partial"] is True
+    assert result["window_days"] == 1.0
+
+
+def test_a_full_window_is_not_marked_partial():
+    result = gcp_billing.reconcile(
+        {"resource_id": "a", "monthly_cost": 304.84},
+        {"costs": {"a": 198.11}, "days_covered": 30.0},
+    )
+    assert result["partial"] is False
+    assert result["billed_monthly"] == 198.11
+
+
+def test_the_evidence_row_says_when_the_data_is_partial():
+    """The operator has to see that a projection came from two days of rows."""
+    from app.tools.rationale import explain
+
+    resource = {
+        "resource_id": "a", "type": "Cloud Run", "cpu_limit": "1",
+        "memory_limit": "2Gi", "min_instances": 1, "cpu_utilization": 5.0,
+        "memory_utilization": 6.0, "monthly_cost": 304.84, "wasted_cost": 200.0,
+        "status": "Idle", "severity": "HIGH", "metrics_source": "monitoring",
+        "billing": gcp_billing.reconcile(
+            {"resource_id": "a", "monthly_cost": 304.84},
+            {"costs": {"a": 10.0}, "days_covered": 1.0},
+        ),
+    }
+    labels = [row["label"] for row in explain(resource)["evidence"]]
+    assert any("partial" in label for label in labels), labels

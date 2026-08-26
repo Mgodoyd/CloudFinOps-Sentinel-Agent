@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 # filter is what keeps this cheap rather than a nicety.
 _QUERY = """
 SELECT
+  MIN(usage_start_time) OVER () AS window_start,
+  MAX(usage_start_time) OVER () AS window_end,
   COALESCE(
     (SELECT value FROM UNNEST(labels) WHERE key = 'goog-cloud-run-service-name'),
     (SELECT value FROM UNNEST(labels) WHERE key = 'goog-k8s-cluster-name'),
@@ -46,7 +48,7 @@ SELECT
 FROM `{table}`
 WHERE project.id = @project
   AND usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @days DAY)
-GROUP BY resource_id
+GROUP BY resource_id, window_start, window_end
 HAVING resource_id IS NOT NULL
 """
 
@@ -61,13 +63,19 @@ def _client():
     return bigquery.Client(project=settings.PROJECT_ID)
 
 
-def fetch_billed_costs() -> Optional[Dict[str, float]]:
-    """{resource_id: net cost over the window}, or None when unavailable.
+def fetch_billed_costs() -> Optional[Dict[str, Any]]:
+    """`{"costs": {resource_id: net cost}, "days_covered": n}`, or None.
 
-    None and an empty dict mean different things and both are real answers: None
-    is "we could not look", {} is "we looked and Google charged nothing for
-    anything we can attribute". Only the first should make the UI stop claiming
-    billed figures.
+    None and an empty result mean different things and both are real answers:
+    None is "we could not look", empty is "we looked and Google charged nothing
+    we can attribute". Only the first should make the UI stop claiming billed
+    figures.
+
+    `days_covered` is what the rows actually span, not the window that was
+    asked for. The export does not backfill, so a freshly enabled one holds a
+    day or two — and scaling that to a month as if it were thirty days would
+    report a tenth of the real bill next to the estimate, which reads as the
+    estimate being wildly wrong rather than the data being young.
     """
     if not is_configured():
         return None
@@ -96,42 +104,68 @@ def fetch_billed_costs() -> Optional[Dict[str, float]]:
         return None
 
     # Credits are negative amounts in the export, so adding them is the net.
-    billed = {
-        row["resource_id"]: round(float(row["cost"] or 0.0) + float(row["credits"] or 0.0), 2)
-        for row in rows
-        if row["resource_id"]
-    }
-    logger.info("Billing export returned %d attributed resource(s)", len(billed))
-    return billed
+    billed: Dict[str, float] = {}
+    start = end = None
+    for row in rows:
+        if row["resource_id"]:
+            billed[row["resource_id"]] = round(
+                float(row["cost"] or 0.0) + float(row["credits"] or 0.0), 2
+            )
+        start = start or row["window_start"]
+        end = end or row["window_end"]
+
+    days = 0.0
+    if start and end:
+        days = max((end - start).total_seconds() / 86400.0, 0.0)
+
+    logger.info(
+        "Billing export returned %d attributed resource(s) over %.1f day(s)",
+        len(billed), days,
+    )
+    return {"costs": billed, "days_covered": days}
 
 
-def to_monthly(cost: float) -> float:
-    """Normalise the window to a month, so it compares to the estimate."""
-    days = max(settings.BILLING_LOOKBACK_DAYS, 1)
-    return round(cost * (30.0 / days), 2)
+def to_monthly(cost: float, days_covered: Optional[float] = None) -> float:
+    """Scale the observed window to a month, so it compares to the estimate.
+
+    Scaled by the days the data actually spans. Using the configured window
+    instead would divide a young export's charges across days it never saw.
+    """
+    days = days_covered if days_covered else settings.BILLING_LOOKBACK_DAYS
+    return round(cost * (30.0 / max(days, 1.0)), 2)
 
 
-def reconcile(resource: Dict[str, Any], billed: Optional[Dict[str, float]]) -> Optional[Dict[str, Any]]:
+# Below this, the export is too young for a monthly projection to mean much.
+MIN_TRUSTWORTHY_DAYS = 3.0
+
+
+def reconcile(
+    resource: Dict[str, Any], billed: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
     """Set the estimate against the invoice for one resource.
 
     Returns None when there is nothing to say — no export configured, or this
     resource has no attributable charge. Silence is correct there: showing
     "billed $0.00" for a resource the export simply does not label would be a
-    worse claim than showing nothing.
+    worse claim than showing nothing at all.
     """
-    if billed is None:
+    if not billed:
         return None
 
-    raw = billed.get(resource["resource_id"])
+    costs = billed.get("costs") or {}
+    raw = costs.get(resource["resource_id"])
     if raw is None:
         return None
 
-    monthly = to_monthly(raw)
+    days = float(billed.get("days_covered") or 0.0)
+    monthly = to_monthly(raw, days)
     estimated = float(resource.get("monthly_cost") or 0.0)
     return {
         "billed_monthly": monthly,
         "estimated_monthly": round(estimated, 2),
         "delta": round(monthly - estimated, 2),
-        "window_days": settings.BILLING_LOOKBACK_DAYS,
+        "window_days": round(days, 1) or settings.BILLING_LOOKBACK_DAYS,
+        # A day-old export projected to a month is arithmetic, not evidence.
+        "partial": days < MIN_TRUSTWORTHY_DAYS,
         "source": "cloud_billing_export",
     }
