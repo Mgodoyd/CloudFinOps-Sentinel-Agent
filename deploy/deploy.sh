@@ -5,6 +5,13 @@
 # and grant IAM. Run from the repository root:  ./deploy/deploy.sh
 set -euo pipefail
 
+# Read .env first, so the values that already work on a laptop reach Cloud Run
+# instead of being retyped at a prompt. Sourced before anything uses them.
+if [ -f .env ]; then
+  set -a; . ./.env; set +a
+fi
+
+
 PROJECT="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-cloudfinops-sentinel}"
@@ -61,7 +68,9 @@ gcloud secrets add-iam-policy-binding sentinel-dashboard-token \
 
 echo "▸ Gemini API key → Secret Manager"
 if ! gcloud secrets describe gemini-api-key --project="$PROJECT" >/dev/null 2>&1; then
-  read -rsp "   Paste your Gemini API key: " KEY; echo
+  KEY="${GEMINI_API_KEY:-}"
+  [ -n "$KEY" ] && echo "   using GEMINI_API_KEY from .env" \
+    || { read -rsp "   Paste your Gemini API key: " KEY; echo; }
   printf '%s' "$KEY" | gcloud secrets create gemini-api-key \
     --data-file=- --project="$PROJECT"
 fi
@@ -70,13 +79,7 @@ gcloud secrets add-iam-policy-binding gemini-api-key \
   --project="$PROJECT" --quiet >/dev/null
 
 # --- Optional channels and cost source -------------------------------------
-# Read from the environment or a local .env, so the values that already work on
-# a laptop reach Cloud Run instead of being retyped. Anything unset is simply
-# not passed: every one of these degrades to "that feature is off".
-if [ -f .env ]; then
-  set -a; . ./.env; set +a
-fi
-
+# Anything unset is simply not passed, and that feature stays off.
 OPTIONAL_ENV=""
 add_env() {  # name value
   [ -n "$2" ] || return 0
