@@ -225,3 +225,57 @@ def test_a_hostile_name_is_still_reported_not_hidden():
     assert verdict["status"] == "Idle"
     assert verdict["savings"] == 487.76
     assert verdict["autonomy"]["level"], "it must still carry an autonomy decision"
+
+
+# --- 6. untagged does not mean unused ---------------------------------------
+def test_a_digest_a_revision_still_uses_is_never_offered_for_deletion(monkeypatch):
+    """Untagged is not unreferenced.
+
+    Cloud Run pins a revision's image by digest, not by tag, so a version with
+    no tags can still be the thing a revision starts from. Deleting it does not
+    fail at delete time — it fails the next time Cloud Run needs to pull, which
+    is the worst moment to discover it.
+    """
+    from app.tools import gcp_inventory
+
+    class Tagless:
+        related_tags = []
+        create_time = None
+
+        def __init__(self, digest):
+            self.name = f"projects/p/locations/us/repositories/r/packages/x/versions/{digest}"
+
+    class FakeAR:
+        def list_repositories(self, parent):
+            return [type("R", (), {"name": "projects/p/locations/us/repositories/r"})()]
+
+        def list_packages(self, parent):
+            return [type("P", (), {"name": "projects/p/.../packages/x"})()]
+
+        def list_versions(self, request):
+            return [Tagless("sha256:in-use"), Tagless("sha256:orphan")]
+
+    monkeypatch.setattr(gcp_inventory, "_digests_in_use", lambda: {"sha256:in-use"})
+    monkeypatch.setattr(
+        "google.cloud.artifactregistry_v1.ArtifactRegistryClient", lambda: FakeAR()
+    )
+    monkeypatch.setattr(settings, "MOCK_MODE", False)
+    monkeypatch.setattr(settings, "SCAN_REGIONS", "us-central1")
+
+    images, _ = gcp_inventory.discover_untagged_images()
+    offered = {i["resource_id"].split("/")[-1] for i in images}
+
+    assert offered == {"sha256:orphan"}, (
+        "a digest a live revision points at must never be offered for deletion"
+    )
+
+
+def test_the_autonomy_level_for_an_image_is_the_same_everywhere():
+    """It was Level 2 in the executor and Level 1 in the drawer, so the answer
+    to 'does this need approval?' depended on which path the audit took."""
+    from app.core.executor import IRREVERSIBLE
+    from app.tools.rationale import explain_untagged_image
+
+    assert "delete_image" not in IRREVERSIBLE
+    verdict = explain_untagged_image({"resource_id": "sha256:abc", "repository": "r"})
+    assert "1" in verdict["autonomy"]["level"], verdict["autonomy"]

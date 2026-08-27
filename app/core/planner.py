@@ -46,7 +46,8 @@ TOOLBOX = [
         "tool": "delete_image",
         "applies_to": "Container Image",
         "args": {"full_name": "the version resource path"},
-        "notes": "Safe: an untagged version cannot be deployed by name.",
+        "notes": "Safe: an untagged version cannot be deployed by name, and "
+                 "discovery excludes any digest a live revision still uses.",
     },
     {
         "tool": "skip",

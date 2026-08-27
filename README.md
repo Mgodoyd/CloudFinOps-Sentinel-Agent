@@ -643,7 +643,7 @@ MOCK_MODE=true DASHBOARD_TOKEN=dev-token \
 
 Open <http://localhost:8080> and unlock it with `dev-token`. Press **RUN AUDIT**.
 
-Run the tests with `pytest` — **405 pass, 2 skip** (the two need the
+Run the tests with `pytest` — **407 pass, 2 skip** (the two need the
 OpenTelemetry exporter), no credentials needed.
 
 ### Point it at a real GCP project
@@ -670,7 +670,7 @@ service account's email already filled in. The same report is at
 | Real CPU/memory utilization | `monitoring.googleapis.com` | `roles/monitoring.viewer` |
 | Gemini via Vertex AI *(optional)* | `aiplatform.googleapis.com` | `roles/aiplatform.user` |
 | Delete orphaned disks *(optional)* | `compute.googleapis.com` | `roles/compute.storageAdmin` |
-| Purge untagged images *(optional)* | `artifactregistry.googleapis.com` | `roles/artifactregistry.admin` |
+| Purge untagged images *(optional)* | `artifactregistry.googleapis.com` | `roles/artifactregistry.repoAdmin` |
 
 ```bash
 PROJECT=your-project
@@ -974,7 +974,7 @@ human-facing `verdict` is localised.
 pytest
 ```
 
-407 tests — 405 pass and 2 skip where the OpenTelemetry exporter is
+409 tests — 407 pass and 2 skip where the OpenTelemetry exporter is
 unavailable — covering the memory bank, cost math, the autonomy matrix, the DRY_RUN
 safety gate, tool serialization, LLM analysis and failure handling, model
 fallbacks, action dispatch per resource type, the real-data guarantees, the
@@ -1022,7 +1022,7 @@ app/
     static/js/i18n.js     UI string catalogue (en/es)
 deploy/                   One-command Cloud Run deploy + Cloud Scheduler
 docs/                     Architecture notes, diagrams and screenshots
-tests/                    407 tests, no credentials needed
+tests/                    409 tests, no credentials needed
 ```
 
 ## Known limitations

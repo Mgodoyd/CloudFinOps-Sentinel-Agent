@@ -25,7 +25,15 @@ from app.tools.memory_tools import memory_bank
 logger = logging.getLogger(__name__)
 
 # Tools whose effect cannot be undone always need a person, whatever they save.
-IRREVERSIBLE = {"delete_disk", "release_address", "delete_image"}
+#
+# delete_image is deliberately not here. A disk holds data and an address is a
+# name other systems point at — losing either is unrecoverable in a way no
+# rebuild fixes. An untagged container version is a build artefact: nothing can
+# deploy it by name, discovery already excludes any digest a live revision still
+# points at, and if one is ever needed again it can be rebuilt from the source
+# that produced it. Escalating a $0.10/month cleanup costs more attention than
+# it saves, which is the same reasoning the value threshold encodes.
+IRREVERSIBLE = {"delete_disk", "release_address"}
 
 
 class PlanExecutor:

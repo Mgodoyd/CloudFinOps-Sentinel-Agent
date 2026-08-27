@@ -50,7 +50,7 @@ for ROLE in \
   roles/run.viewer roles/run.admin \
   roles/monitoring.viewer \
   roles/compute.viewer roles/compute.storageAdmin \
-  roles/artifactregistry.reader \
+  roles/artifactregistry.repoAdmin \
   roles/datastore.user \
   roles/cloudtrace.agent \
   roles/logging.logWriter \

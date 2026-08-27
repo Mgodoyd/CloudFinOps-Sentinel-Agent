@@ -216,6 +216,43 @@ def discover_unused_addresses() -> Tuple[List[Dict[str, Any]], List[Problem]]:
 # ----------------------------------------------------------------------
 # Artifact Registry — untagged image versions
 # ----------------------------------------------------------------------
+def _digests_in_use() -> set:
+    """Image digests a Cloud Run revision still points at.
+
+    A revision references its image by digest, not by tag, so "untagged" does
+    not mean "unreferenced". Deleting a digest an existing revision uses leaves
+    that revision unable to start — it will not fail until Cloud Run next needs
+    to pull, which is the worst time to find out.
+
+    Best effort: if the revisions cannot be listed, nothing is excluded and the
+    caller still has the tag check. Failing open here would be the wrong default
+    only if the tag check did not exist.
+    """
+    digests: set = set()
+    try:
+        from google.cloud import run_v2
+
+        client = run_v2.RevisionsClient()
+        for region in settings.regions:
+            parent = f"projects/{settings.PROJECT_ID}/locations/{region}"
+            try:
+                services = run_v2.ServicesClient().list_services(
+                    request=run_v2.ListServicesRequest(parent=parent)
+                )
+            except Exception:
+                continue
+            for service in services:
+                for revision in client.list_revisions(
+                    request=run_v2.ListRevisionsRequest(parent=service.name)
+                ):
+                    for container in revision.containers:
+                        if "@sha256:" in container.image:
+                            digests.add(container.image.split("@")[-1])
+    except Exception as exc:
+        logger.warning("Could not list revision images (%s); relying on tags alone", exc)
+    return digests
+
+
 def discover_untagged_images(max_per_repo: int = 25) -> Tuple[List[Dict[str, Any]], List[Problem]]:
     """Image versions with no tags — usually orphaned build layers."""
     try:
@@ -227,6 +264,9 @@ def discover_untagged_images(max_per_repo: int = 25) -> Tuple[List[Dict[str, Any
         )
         client = artifactregistry_v1.ArtifactRegistryClient()
         images: List[Dict[str, Any]] = []
+        # Untagged is not the same as unused: a revision pins its image by
+        # digest. These are the digests something still runs on.
+        in_use = _digests_in_use()
 
         for region in settings.regions:
             try:
@@ -248,6 +288,9 @@ def discover_untagged_images(max_per_repo: int = 25) -> Tuple[List[Dict[str, Any
                         )
                     ):
                         if version.related_tags:
+                            continue
+                        if version.name.split("/")[-1] in in_use:
+                            # Untagged, but a revision still points at it.
                             continue
                         images.append(
                             {
