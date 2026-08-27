@@ -1,7 +1,17 @@
 # CloudFinOps Sentinel
 
-**An autonomous FinOps agent for Google Cloud.** It inspects a Cloud Run
-estate on a schedule, works out what each resource costs against what it
+This began with $150 of hackathon credits and a habit everyone has: spinning
+services up to try something is easy, remembering to spin them back down is not.
+
+The first time this agent ran against the project that hosts it, it found a
+webhook listener still up with `min-instances=1` at 1% CPU — $52.24 a month for
+nothing — plus an orphaned disk and a static IP reserved to no one. Then it
+found itself. `cloudfinops-sentinel` sits in its own inventory at $6.88/month,
+audited like everything else. That was not designed; it falls out of treating
+the project as the estate, with no exceptions.
+
+**So it is an autonomous FinOps agent for Google Cloud.** It inspects a Cloud
+Run estate on a schedule, works out what each resource costs against what it
 actually uses, fixes the cheap problems by itself, and opens an approval ticket
 for the risky ones — then remembers what it did so it never does it twice.
 
@@ -120,6 +130,13 @@ Not a chat loop and not a fixed script. Each audit:
    around the failure (up to `MAX_REPLANS = 2`) rather than abandoning the run.
 6. **Remembers** — remediations, tickets, runs, and the *shape* each resource
    had when it was acted on.
+
+**The loop finishes on its own.** Nobody opens a browser for any of it: the
+schedule fires, the estate is scanned, judged, planned and changed, and the run
+closes. What waits for a person is only what is irreversible or expensive — a
+deliberate boundary drawn around actions that cannot be undone, not a step left
+unfinished. An agent that deletes disks unattended is not more autonomous, it is
+less careful.
 
 Cost is bounded deliberately: **two Gemini calls per audit**, plus one per
 failed round. A tool-calling loop would spend one request per invocation and

@@ -85,15 +85,27 @@ the same fleet summarised in a paragraph came back in about eighteen seconds.
 
 > *How much real-world friction does the agent remove on its own?*
 
+**The friction is mine.** This was built on $150 of hackathon credits, in the
+project it now audits. Its first real run found a webhook listener left up with
+`min-instances=1` at 1% CPU — $52.24 a month for nothing — an orphaned disk, and
+a static IP reserved to no one. Every one of those is my own leftover, from
+building this.
+
+It also found itself. `cloudfinops-sentinel` sits in its own inventory at
+$6.88/month. That was not designed; it falls out of treating the project as the
+estate, with no exceptions — and an agent that exempts itself from the rule it
+enforces is not one I would trust with write credentials.
+
 It runs hourly with nobody watching, and it acts. Level 1 changes — reversible,
 under $40/month — are applied without asking. Level 2 changes become a ticket
 that reaches the operator's phone. It remembers what it fixed, what shape each
 resource had when it acted, and what a human declined, so it never proposes the
 same thing twice and never re-raises a rejected change.
 
-It also audits its own service. `cloudfinops-sentinel` appears in its own
-inventory at $6.88/month. That was not designed; it falls out of treating the
-project as the estate, with no exceptions.
+**The workflow completes without intervention.** What waits for a person is
+only what is irreversible or expensive, which is a boundary drawn on purpose
+rather than a step left unfinished. Deleting a disk unattended would not make
+the agent more autonomous, only less careful.
 
 ### Architectural Discipline & Tech Stack — 30%
 
@@ -106,7 +118,8 @@ project as the estate, with no exceptions.
 | **Credentials** | Secret Manager for the Gemini key, the dashboard token, the bot token and the Slack webhook. No default in code, and [a test](../tests/test_no_committed_secrets.py) that fails the build if a credential is committed. |
 | **Failure handling** | Gemini → Gemma → deterministic rules. A failed plan step is re-planned around, up to twice. Firestore unreachable starts anyway. Every degraded run says so. |
 | **Security** | Token auth with no development bypass, a separate scheduler credential, constant-time comparison, and [prompt-injection guardrails](../README.md#the-estate-is-untrusted-input) treating resource names as untrusted input. |
-| **Tests** | 390 passing, no credentials required, hermetic. Several exist because the bug happened: the approval contract, simulated/real isolation, the duplicate notification. |
+| **Retrieval** | Deliberately none. Every lookup into memory is exact and by a known key — `check_history(resource_id)`, `last_rejection(resource_id)` — which is what a key-value store is for. A vector index would add infrastructure and latency to answer a question nobody is asking: semantic similarity is the wrong retrieval model when the identifier is already exact. It would earn its place only if the agent accumulated hundreds of free-text rejection reasons and had to ask "have humans refused anything like this before?" |
+| **Tests** | 404 passing, no credentials required, hermetic. Several exist because the bug happened: the approval contract, simulated/real isolation, the duplicate notification. |
 
 ### Demo & Production Readiness — 30%
 
