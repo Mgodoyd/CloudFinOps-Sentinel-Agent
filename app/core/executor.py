@@ -94,7 +94,16 @@ class PlanExecutor:
             except (KeyError, TypeError, ValueError) as exc:
                 logger.warning("No sizing for %s (%s); keeping its current shape", rid, exc)
 
-        return rationale.merge_target_shape(args, recommended, current)
+        shape = rationale.merge_target_shape(args, recommended, current)
+        if shape and resource is not None:
+            # The plan can name a memory the API will refuse. Raising it here
+            # keeps a valid change instead of failing the call.
+            from app.tools.gcp_metrics import parse_memory_gib
+
+            floor = rationale.memory_floor(resource)
+            if int(parse_memory_gib(shape["memory"]) * 1024) < floor:
+                shape["memory"] = rationale._fmt_memory(floor)
+        return shape
 
     # ------------------------------------------------------------------
     def run(self, plan: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:

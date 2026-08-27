@@ -118,3 +118,62 @@ def test_a_real_reduction_is_still_applied(sent):
     assert args == ("cloudfinops-sentinel", "1Gi")
     assert kwargs["new_cpu"] == "500m", "the reduction the sizing found"
     assert kwargs["new_min_instances"] == 0
+
+
+# --- 4. shapes the API will actually accept ---------------------------------
+ALWAYS_ALLOCATED = {
+    "resource_id": "always-on", "type": "Cloud Run",
+    "cpu_limit": "1", "memory_limit": "512Mi", "min_instances": 2,
+    "cpu_utilization": 1.0, "memory_utilization": 5.0,
+    "monthly_cost": 132.72, "wasted_cost": 99.57,
+    "status": "Idle", "severity": "HIGH",
+    "cpu_always_allocated": True,
+}
+
+
+def test_memory_stays_above_the_floor_when_cpu_is_always_allocated():
+    """Cloud Run refuses under 512Mi with --no-cpu-throttling:
+
+        400 Total memory < 512 Mi is not supported with cpu always allocated
+
+    The sizing did not know the setting existed, so it proposed 256Mi from the
+    observed peak and the API rejected it — on every audit, forever, because a
+    failed remediation is retried rather than remembered as done.
+    """
+    target = rationale.recommend_sizing(ALWAYS_ALLOCATED)["target"]
+    assert target["memory"] == "512Mi"
+
+
+def test_the_floor_does_not_apply_to_a_throttled_service():
+    """The limit is the service's setting, not a blanket rule. Applying it
+    everywhere would block valid 256Mi recommendations."""
+    throttled = {**ALWAYS_ALLOCATED, "cpu_always_allocated": False}
+    assert rationale.recommend_sizing(throttled)["target"]["memory"] == "256Mi"
+
+
+def test_an_unknown_setting_is_treated_as_throttled():
+    """Only simulated data lacks the field; assuming the stricter limit there
+    would change the demo for no reason."""
+    unknown = {k: v for k, v in ALWAYS_ALLOCATED.items() if k != "cpu_always_allocated"}
+    assert rationale.recommend_sizing(unknown)["target"]["memory"] == "256Mi"
+
+
+def test_a_plan_naming_an_invalid_memory_is_raised_to_the_floor(sent):
+    """The model can name a memory the API will refuse. Raising it keeps a
+    valid change instead of failing the call."""
+    executor = PlanExecutor(fleet=[ALWAYS_ALLOCATED])
+    shape = executor._target_shape("always-on", {"memory": "256Mi", "min_instances": 0})
+
+    assert shape["memory"] == "512Mi"
+
+
+def test_the_real_saving_survives_the_clamp(sent):
+    """Raising the memory must not swallow the change that mattered: this
+    service bills 24/7 on two warm instances, and min-instances 0 is the win."""
+    results, _ = PlanExecutor(fleet=[ALWAYS_ALLOCATED]).run(
+        {"steps": [step("always-on", cpu="1", min_instances=0)]}
+    )
+
+    assert results[0]["status"] == "awaiting_approval", "$99.57 is over the threshold"
+    ticket = memory_bank.snapshot()["approvals"][0]
+    assert ticket["target_shape"] == {"memory": "512Mi", "cpu": "1", "min_instances": 0}

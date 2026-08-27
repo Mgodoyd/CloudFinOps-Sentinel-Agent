@@ -65,6 +65,10 @@ def _services_in_region(region: str) -> List[Dict[str, Any]]:
                 "memory_limit": limits.get("memory", "512Mi"),
                 "min_instances": service.template.scaling.min_instance_count,
                 "max_instances": service.template.scaling.max_instance_count,
+                # With CPU always allocated, Cloud Run refuses memory under
+                # 512Mi. Without knowing this the sizing proposes 256Mi and the
+                # API rejects it — every hour, forever.
+                "cpu_always_allocated": bool(containers) and not containers[0].resources.cpu_idle,
                 "uri": service.uri,
             }
         )

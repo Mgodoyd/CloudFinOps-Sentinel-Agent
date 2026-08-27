@@ -23,6 +23,22 @@ SAFETY_HEADROOM = 1.4  # keep 40% above observed peak
 MAX_REDUCTION_FACTOR = 4
 # Floor for any recommendation, regardless of observed usage.
 MIN_RECOMMENDED_MIB = 256
+# Cloud Run refuses anything under this when CPU is always allocated
+# (--no-cpu-throttling). The limit is the service's setting, not its traffic, so
+# it holds even after min-instances goes to zero.
+MIN_MEMORY_CPU_ALWAYS_MIB = 512
+
+
+def memory_floor(resource: Dict[str, Any]) -> int:
+    """The smallest memory Cloud Run will accept for this service.
+
+    Unknown means throttled: the field is only absent for simulated data, and
+    assuming the stricter limit there would block recommendations that are
+    perfectly valid.
+    """
+    if resource.get("cpu_always_allocated"):
+        return MIN_MEMORY_CPU_ALWAYS_MIB
+    return MIN_RECOMMENDED_MIB
 
 
 def _fmt_memory(mib: int) -> str:
@@ -51,7 +67,7 @@ def recommend_sizing(resource: Dict[str, Any], lang: str = DEFAULT_LANG) -> Dict
     mem_peak_mib = current_mib * (resource["memory_utilization"] / 100)
     cpu_peak = current_cpu * (resource["cpu_utilization"] / 100)
 
-    floor_mib = max(MIN_RECOMMENDED_MIB, current_mib // MAX_REDUCTION_FACTOR)
+    floor_mib = max(memory_floor(resource), current_mib // MAX_REDUCTION_FACTOR)
     target_mib = next(
         (s for s in MEMORY_STEPS_MIB if s >= max(mem_peak_mib * SAFETY_HEADROOM, floor_mib)),
         current_mib,

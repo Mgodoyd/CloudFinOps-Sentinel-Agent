@@ -259,7 +259,10 @@ target_cpu    = smallest valid step ≥ max(cpu_peak × 1.4, cpu_floor)
   When the cap binds, the drawer says so.
 - Valid memory steps: `128Mi 256Mi 512Mi 1Gi 2Gi 4Gi 8Gi 16Gi 32Gi`.
   Valid CPU steps: `0.25 0.5 1 2 4 8`. Cloud Run requires ≥1 vCPU for ≥4Gi and
-  ≥2 vCPU for ≥8Gi, and the sizing respects that.
+  ≥2 vCPU for ≥8Gi, and **≥512Mi whenever CPU is always allocated** — a service
+  setting rather than a traffic property, so it holds even after min-instances
+  goes to zero. The sizing respects all three; a shape the API would refuse is
+  not a recommendation, it is an error that repeats on every audit.
 - `min_instances` is only driven to `0` when the verdict is **Idle**.
 
 ### A worked example
@@ -669,7 +672,7 @@ MOCK_MODE=true DASHBOARD_TOKEN=dev-token \
 
 Open <http://localhost:8080> and unlock it with `dev-token`. Press **RUN AUDIT**.
 
-Run the tests with `pytest` — **413 pass, 2 skip** (the two need the
+Run the tests with `pytest` — **418 pass, 2 skip** (the two need the
 OpenTelemetry exporter), no credentials needed.
 
 ### Point it at a real GCP project
@@ -1000,7 +1003,7 @@ human-facing `verdict` is localised.
 pytest
 ```
 
-415 tests — 413 pass and 2 skip where the OpenTelemetry exporter is
+420 tests — 418 pass and 2 skip where the OpenTelemetry exporter is
 unavailable — covering the memory bank, cost math, the autonomy matrix, the DRY_RUN
 safety gate, tool serialization, LLM analysis and failure handling, model
 fallbacks, action dispatch per resource type, the real-data guarantees, the
@@ -1048,7 +1051,7 @@ app/
     static/js/i18n.js     UI string catalogue (en/es)
 deploy/                   One-command Cloud Run deploy + Cloud Scheduler
 docs/                     Architecture notes, diagrams and screenshots
-tests/                    415 tests, no credentials needed
+tests/                    420 tests, no credentials needed
 ```
 
 ## Known limitations
