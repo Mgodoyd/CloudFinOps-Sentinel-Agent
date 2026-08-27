@@ -672,7 +672,7 @@ MOCK_MODE=true DASHBOARD_TOKEN=dev-token \
 
 Open <http://localhost:8080> and unlock it with `dev-token`. Press **RUN AUDIT**.
 
-Run the tests with `pytest` — **418 pass, 2 skip** (the two need the
+Run the tests with `pytest` — **419 pass, 2 skip** (the two need the
 OpenTelemetry exporter), no credentials needed.
 
 ### Point it at a real GCP project
@@ -1003,7 +1003,7 @@ human-facing `verdict` is localised.
 pytest
 ```
 
-420 tests — 418 pass and 2 skip where the OpenTelemetry exporter is
+421 tests — 419 pass and 2 skip where the OpenTelemetry exporter is
 unavailable — covering the memory bank, cost math, the autonomy matrix, the DRY_RUN
 safety gate, tool serialization, LLM analysis and failure handling, model
 fallbacks, action dispatch per resource type, the real-data guarantees, the
@@ -1051,7 +1051,7 @@ app/
     static/js/i18n.js     UI string catalogue (en/es)
 deploy/                   One-command Cloud Run deploy + Cloud Scheduler
 docs/                     Architecture notes, diagrams and screenshots
-tests/                    420 tests, no credentials needed
+tests/                    421 tests, no credentials needed
 ```
 
 ## Known limitations

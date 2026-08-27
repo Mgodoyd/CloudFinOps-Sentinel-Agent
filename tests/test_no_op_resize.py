@@ -177,3 +177,65 @@ def test_the_real_saving_survives_the_clamp(sent):
     assert results[0]["status"] == "awaiting_approval", "$99.57 is over the threshold"
     ticket = memory_bank.snapshot()["approvals"][0]
     assert ticket["target_shape"] == {"memory": "512Mi", "cpu": "1", "min_instances": 0}
+
+
+def test_a_stale_ticket_asking_for_256mi_is_raised_at_the_api_boundary(monkeypatch):
+    """The clamp upstream does not help a ticket already stored.
+
+    A ticket raised before the agent understood the constraint carries 256Mi in
+    its target shape. Approving it goes straight to resize_service, which is why
+    the floor is enforced there too — at the only door to the API, and the one
+    place that reads the service's real allocation mode rather than a value
+    copied into a ticket hours earlier.
+    """
+    from app.core.config import settings
+    from app.tools import gcp_actions
+
+    class Limits(dict):
+        pass
+
+    class Resources:
+        def __init__(self):
+            self.limits = Limits({"cpu": "1", "memory": "512Mi"})
+            self.cpu_idle = False          # CPU always allocated
+
+    class Container:
+        def __init__(self):
+            self.resources = Resources()
+            self.image = "img"
+
+    class Scaling:
+        min_instance_count = 2
+
+    class Template:
+        def __init__(self):
+            self.containers = [Container()]
+            self.scaling = Scaling()
+            self.revision = "rev-1"
+
+    class Service:
+        def __init__(self):
+            self.template = Template()
+            self.uri = "https://x.run.app"
+
+    service = Service()
+
+    class FakeClient:
+        def get_service(self, request=None):
+            return service
+
+        def update_service(self, request=None):  # pragma: no cover - never reached
+            raise RuntimeError("the protobuf request rejects a stand-in service")
+
+    monkeypatch.setattr(settings, "MOCK_MODE", False)
+    monkeypatch.setattr(settings, "DRY_RUN", False)
+    monkeypatch.setattr("google.cloud.run_v2.ServicesClient", lambda: FakeClient())
+
+    gcp_actions.resize_service("always-on", "256Mi", new_cpu="1", new_min_instances=0)
+
+    # Asserted on the service object rather than on the outgoing call: the
+    # protobuf request will not accept a stand-in, so the limits written onto
+    # the service are as close to the wire as a unit test can get.
+    assert service.template.containers[0].resources.limits["memory"] == "512Mi", (
+        "what reaches Cloud Run must be something Cloud Run accepts"
+    )

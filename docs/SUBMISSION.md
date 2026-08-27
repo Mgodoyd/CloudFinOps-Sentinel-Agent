@@ -119,7 +119,7 @@ the agent more autonomous, only less careful.
 | **Failure handling** | Gemini → Gemma → deterministic rules. A failed plan step is re-planned around, up to twice. Firestore unreachable starts anyway. Every degraded run says so. |
 | **Security** | Token auth with no development bypass, a separate scheduler credential, constant-time comparison, and [prompt-injection guardrails](../README.md#the-estate-is-untrusted-input) treating resource names as untrusted input. |
 | **Retrieval** | Deliberately none. Every lookup into memory is exact and by a known key — `check_history(resource_id)`, `last_rejection(resource_id)` — which is what a key-value store is for. A vector index would add infrastructure and latency to answer a question nobody is asking: semantic similarity is the wrong retrieval model when the identifier is already exact. It would earn its place only if the agent accumulated hundreds of free-text rejection reasons and had to ask "have humans refused anything like this before?" |
-| **Tests** | 418 passing, no credentials required, hermetic. Several exist because the bug happened: the approval contract, simulated/real isolation, the duplicate notification. |
+| **Tests** | 419 passing, no credentials required, hermetic. Several exist because the bug happened: the approval contract, simulated/real isolation, the duplicate notification. |
 
 ### Demo & Production Readiness — 30%
 

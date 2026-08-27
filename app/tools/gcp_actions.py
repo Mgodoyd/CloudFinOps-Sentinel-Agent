@@ -12,7 +12,7 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.config import settings
-from app.core.trace import EXECUTION, OK, WARN, tracer
+from app.core.trace import EXECUTION, INFO, OK, WARN, tracer
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,38 @@ def resize_service(
             })
 
         # 2. Send the mutation.
+        #
+        # The floor is enforced here, at the only door to the API, because this
+        # is the one place that knows the service's real allocation mode. A
+        # ticket raised before the agent understood the constraint still carries
+        # the memory the API refuses, and re-checking it upstream would leave
+        # every stored ticket poisoned until someone cleared it by hand.
+        if not container.resources.cpu_idle:
+            from app.tools.rationale import MIN_MEMORY_CPU_ALWAYS_MIB, _fmt_memory
+            from app.tools.gcp_metrics import parse_memory_gib
+
+            if int(parse_memory_gib(new_memory) * 1024) < MIN_MEMORY_CPU_ALWAYS_MIB:
+                raised = _fmt_memory(MIN_MEMORY_CPU_ALWAYS_MIB)
+                logger.info(
+                    "%s runs with CPU always allocated; raising %s to %s, the "
+                    "least Cloud Run accepts", service_id, new_memory, raised,
+                )
+                tracer.step(
+                    EXECUTION,
+                    f"{service_id} · {new_memory} raised to {raised} — Cloud Run "
+                    "requires it with CPU always allocated",
+                    status=INFO, resource_id=service_id,
+                    detail={"requested": new_memory, "sent": raised,
+                            "reason": "cpu always allocated (unthrottled)"},
+                )
+                new_memory = raised
+                bits = [b for b in bits if b != "256Mi"]
+                target = " / ".join(
+                    ([f"{new_cpu} vCPU"] if new_cpu else []) + [new_memory]
+                    + ([f"min-instances {new_min_instances}"]
+                       if new_min_instances is not None else [])
+                )
+
         container.resources.limits["memory"] = new_memory
         if new_cpu:
             container.resources.limits["cpu"] = new_cpu
