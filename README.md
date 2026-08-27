@@ -245,7 +245,14 @@ target_cpu    = smallest valid step ≥ max(cpu_peak × 1.4, cpu_floor)
 ```
 
 - **1.4×** the observed peak — a 40 % safety headroom over what was actually used.
-- **Never grows** a resource.
+- **Never grows** a resource, and **never applies a shape the resource already
+  has.** A resize to the current allocation deploys a new revision, changes
+  nothing, and books a saving that will never reach the bill — for an agent
+  whose entire output is a savings figure, that is the most damaging thing it
+  can get wrong. Shapes are compared by value, so `1` and `1000m` are not
+  treated as a change. A proposal that resolves to the current shape is also
+  dropped in favour of the deterministic sizing, because a model answering
+  "cpu: 1" for a service already at 1 vCPU has proposed nothing.
 - **Never cuts more than 4× in one audit.** A service with minutes of traffic
   history shows artificially low peaks, and a 16× cut on that evidence is a
   guess rather than a right-sizing. Repeated audits converge safely instead.
@@ -662,7 +669,7 @@ MOCK_MODE=true DASHBOARD_TOKEN=dev-token \
 
 Open <http://localhost:8080> and unlock it with `dev-token`. Press **RUN AUDIT**.
 
-Run the tests with `pytest` — **407 pass, 2 skip** (the two need the
+Run the tests with `pytest` — **413 pass, 2 skip** (the two need the
 OpenTelemetry exporter), no credentials needed.
 
 ### Point it at a real GCP project
@@ -993,7 +1000,7 @@ human-facing `verdict` is localised.
 pytest
 ```
 
-409 tests — 407 pass and 2 skip where the OpenTelemetry exporter is
+415 tests — 413 pass and 2 skip where the OpenTelemetry exporter is
 unavailable — covering the memory bank, cost math, the autonomy matrix, the DRY_RUN
 safety gate, tool serialization, LLM analysis and failure handling, model
 fallbacks, action dispatch per resource type, the real-data guarantees, the
@@ -1041,7 +1048,7 @@ app/
     static/js/i18n.js     UI string catalogue (en/es)
 deploy/                   One-command Cloud Run deploy + Cloud Scheduler
 docs/                     Architecture notes, diagrams and screenshots
-tests/                    409 tests, no credentials needed
+tests/                    415 tests, no credentials needed
 ```
 
 ## Known limitations

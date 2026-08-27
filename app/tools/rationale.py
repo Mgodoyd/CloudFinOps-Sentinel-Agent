@@ -116,6 +116,22 @@ def render_changes(specs: List[Dict[str, Any]], lang: str = DEFAULT_LANG) -> Lis
     ]
 
 
+def _merge(sources: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """First non-empty value for each dimension, in source order."""
+    def pick(key: str) -> Any:
+        for source in sources:
+            if source.get(key) not in (None, ""):
+                return source[key]
+        return None
+
+    memory = pick("memory")
+    if not memory:
+        return None
+    mins = pick("min_instances")
+    return {"memory": str(memory), "cpu": str(pick("cpu") or ""),
+            "min_instances": int(mins) if mins is not None else None}
+
+
 def merge_target_shape(
     proposed: Optional[Dict[str, Any]] = None,
     recommended: Optional[Dict[str, Any]] = None,
@@ -133,6 +149,15 @@ def merge_target_shape(
     must treat as "do not act" rather than "use a default".
     """
     sources = [s for s in (proposed, recommended, current) if s]
+
+    # A model that answers "cpu: 1" for a service already at 1 vCPU has proposed
+    # nothing, and letting that win silently overrides the sizing that did find
+    # a real reduction. So if the proposal resolves to exactly the current
+    # shape, it is dropped and the deterministic recommendation is used instead.
+    if proposed and current:
+        merged = _merge(sources)
+        if merged and same_shape(merged, current):
+            sources = [s for s in (recommended, current) if s]
 
     def pick(key: str) -> Any:
         for source in sources:
@@ -164,6 +189,24 @@ def merge_target_shape(
         "cpu": cpu,
         "min_instances": int(min_instances) if min_instances is not None else None,
     }
+
+
+def same_shape(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> bool:
+    """Whether two shapes describe the same allocation.
+
+    Compared on parsed values, not on strings: "1" and "1000m" are the same CPU,
+    and "1Gi" and "1024Mi" are the same memory. A textual comparison would call
+    a no-op a change and deploy a revision for nothing.
+    """
+    if not a or not b:
+        return False
+    from app.tools.gcp_metrics import parse_cpu, parse_memory_gib
+
+    return (
+        parse_memory_gib(str(a.get("memory") or 0)) == parse_memory_gib(str(b.get("memory") or 0))
+        and parse_cpu(str(a.get("cpu") or 0)) == parse_cpu(str(b.get("cpu") or 0))
+        and int(a.get("min_instances") or 0) == int(b.get("min_instances") or 0)
+    )
 
 
 def describe_shape(shape: Dict[str, Any]) -> str:

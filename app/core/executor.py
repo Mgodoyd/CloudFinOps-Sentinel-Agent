@@ -64,6 +64,15 @@ class PlanExecutor:
             return float(measured["wasted_cost"])
         return float(step.get("estimated_saving") or 0.0)
 
+    def _current(self, rid: str) -> Optional[Dict[str, Any]]:
+        """The shape the resource has right now, as measured by the scan."""
+        resource = self.fleet.get(rid)
+        if resource is None:
+            return None
+        return {"memory": resource.get("memory_limit"),
+                "cpu": resource.get("cpu_limit"),
+                "min_instances": resource.get("min_instances")}
+
     def _target_shape(self, rid: str, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """The concrete shape this step will apply, resolved from measurements.
 
@@ -164,6 +173,16 @@ class PlanExecutor:
             return result(
                 "skipped",
                 f"No target shape could be established for {rid} — nothing was applied.",
+            )
+
+        # A resize to the shape a resource already has deploys a new revision,
+        # changes nothing, and books a saving that will never appear on the
+        # bill. For an agent whose whole output is a savings figure, that is the
+        # most damaging thing it can get wrong.
+        if tool == "resize_service" and rationale.same_shape(shape, self._current(rid)):
+            return result(
+                "skipped",
+                f"{rid} is already {rationale.describe_shape(shape)} — nothing to change.",
             )
 
         if needs_human:
