@@ -260,6 +260,12 @@ def refresh_inventory() -> None:
     """
     from app.tools import gcp_inventory
 
+    if settings.MOCK_MODE:
+        # Nothing to re-read: the demo fleet is static. Seeding from an empty
+        # scan would blank it and label the result "gcp", which is how an
+        # approval used to turn a simulated run into one claiming live data.
+        return
+
     with telemetry.span("agent.refresh_after_action"):
         try:
             # One scan, not two: discover_all already lists Cloud Run, so its

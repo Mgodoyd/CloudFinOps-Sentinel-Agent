@@ -73,6 +73,11 @@ def _services_in_region(region: str) -> List[Dict[str, Any]]:
 
 def discover_cloud_run() -> Tuple[List[Dict[str, Any]], List[Problem]]:
     """Find Cloud Run services in every configured region."""
+    if settings.MOCK_MODE:
+        # Reached directly by fetch_services as well as through discover_all,
+        # so the mode is checked on both doors rather than only the front one.
+        return [], []
+
     regions = settings.regions
     services: List[Dict[str, Any]] = []
     problems: List[Problem] = []
@@ -340,6 +345,15 @@ def discover_all(force_refresh: bool = False, allow_discovery: bool = True) -> D
     Cached: a full scan touches four APIs across every configured region and
     takes seconds, while the dashboard polls every few seconds.
     """
+    # Guarded here rather than at each call site. Every caller that reaches GCP
+    # has to remember the mode, and one that forgets turns a simulated demo into
+    # a live scan of somebody's project — which is how the post-action refresh
+    # quietly replaced the demo fleet with real services mid-run.
+    if settings.MOCK_MODE:
+        return {"cloud_run": [], "orphan_disks": [], "unused_addresses": [],
+                "untagged_images": [], "problems": [], "scanned_regions": [],
+                "simulated": True}
+
     if force_refresh:
         _discovery_cache.clear()
         tracer.step(DISCOVERY, "Cache bypassed — re-querying GCP",

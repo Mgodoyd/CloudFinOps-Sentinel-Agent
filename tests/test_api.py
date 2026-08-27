@@ -14,6 +14,11 @@ def test_dashboard_is_served(client):
 
 
 def test_state_payload_shape(client):
+    # /api/state never starts a scan by design, so it reports "idle" until one
+    # has run. Trigger it here rather than depending on another test having
+    # warmed the cache first.
+    client.post("/api/audit")
+
     body = client.get("/api/state").json()
     for key in ("kpis", "approvals", "remediations", "all_resources", "charts", "events"):
         assert key in body
@@ -277,18 +282,24 @@ def test_the_suite_is_hermetic():
     assert settings.GEMINI_API_KEY == ""
 
 
-def test_an_executed_action_refreshes_the_inventory(client, monkeypatch):
+def test_a_refresh_against_a_real_project_re_reads_gcp(client, monkeypatch):
     """Regression: after approving, the SSE push arrived but /api/state still
     served the cached inventory — so costs, states and charts stayed stale
     until the next scan."""
+    from app.core.config import settings
     from app.main import refresh_inventory
     from app.tools import gcp_inventory, gcp_metrics
 
+    monkeypatch.setattr(settings, "MOCK_MODE", False)
+    monkeypatch.setattr(gcp_inventory, "discover_orphan_disks", lambda: ([], []))
+    monkeypatch.setattr(gcp_inventory, "discover_unused_addresses", lambda: ([], []))
+    monkeypatch.setattr(gcp_inventory, "discover_untagged_images", lambda: ([], []))
+
     calls = []
-    original = gcp_inventory.discover_cloud_run
     monkeypatch.setattr(
         gcp_inventory, "discover_cloud_run",
-        lambda: (calls.append(1), original())[1],
+        lambda: (calls.append(1), ([{"resource_id": "svc", "cpu_limit": "1",
+                                     "memory_limit": "512Mi", "min_instances": 0}], []))[1],
     )
 
     gcp_metrics._services_cache.reset()
@@ -306,6 +317,35 @@ def test_an_executed_action_refreshes_the_inventory(client, monkeypatch):
 
     _, source = gcp_metrics.describe_resources(allow_discovery=False)
     assert source == "gcp", "the dashboard must now see fresh data"
+
+
+def test_a_refresh_in_mock_mode_never_touches_gcp(client, monkeypatch):
+    """The bug the guard exists for.
+
+    `discover_all` had no notion of MOCK_MODE — only its callers did — and the
+    post-action refresh called it directly. So approving a ticket against the
+    demo fleet fired a real four-API scan of whatever project the credentials
+    pointed at, and seeded the cache with those services. A simulated run
+    silently became a live one, mid-demo, with the header still reading
+    SOURCE: SIMULATED until the next poll.
+    """
+    from app.main import refresh_inventory
+    from app.tools import gcp_inventory, gcp_metrics
+
+    calls = []
+    for name in ("discover_cloud_run", "discover_orphan_disks",
+                 "discover_unused_addresses", "discover_untagged_images"):
+        monkeypatch.setattr(gcp_inventory, name,
+                            lambda n=name: (calls.append(n), ([], []))[1])
+
+    gcp_metrics._services_cache.reset()
+    gcp_inventory._discovery_cache.reset()
+    refresh_inventory()
+
+    assert calls == [], f"MOCK_MODE must reach no GCP API, but called {calls}"
+
+    _, source = gcp_metrics.describe_resources()
+    assert source == "simulated", "the demo fleet must survive an approval"
 
 
 def test_every_anomaly_has_something_to_approve(client):
