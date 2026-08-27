@@ -657,6 +657,8 @@ fleet and falls back to a deterministic heuristic audit if Gemini is not
 configured. The dashboard labels which mode you are in (`SOURCE: SIMULATED`,
 `ENGINE: HEURISTIC`) so demo data is never mistaken for live data.
 
+Python 3.11 or newer (the container runs 3.12).
+
 ```bash
 git clone https://github.com/Mgodoyd/CloudFinOps-Sentinel-Agent.git
 cd CloudFinOps-Sentinel-Agent
@@ -767,19 +769,68 @@ reasoning.
 
 ## Deploying to Cloud Run
 
+### Before you start
+
+```bash
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+```
+
+The script sources `.env` from the repository root, so the values that already
+work on your laptop reach Cloud Run instead of being retyped at a prompt. Fill
+in `GEMINI_API_KEY` and `DASHBOARD_TOKEN` at minimum; `SLACK_WEBHOOK_URL`,
+`TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` and `BILLING_EXPORT_TABLE` are picked
+up if present and skipped if not.
+
+It is a bash script — on Windows run it from **Git Bash** or **Cloud Shell**.
+
+### One command
+
 ```bash
 ./deploy/deploy.sh
 ```
 
-One command: enables the APIs, creates a least-privilege service account,
-provisions Firestore, stores the Gemini key and dashboard token in Secret
-Manager, builds and deploys the container, and schedules hourly audits with
-Cloud Scheduler. See [deploy/README.md](deploy/README.md) for what each role is
-for and how to verify the result.
+Enables the APIs, creates a least-privilege service account, provisions
+Firestore, stores the Gemini key and the dashboard token in Secret Manager,
+builds and deploys the container, and schedules hourly audits with Cloud
+Scheduler. It prints the service URL when it finishes. See
+[deploy/README.md](deploy/README.md) for what each role is for and how to
+verify the result.
 
 The Cloud Scheduler job is what makes the agent autonomous rather than
 button-driven: it runs while nobody is watching and leaves approval tickets
 waiting.
+
+### Open it, and check it is really wired up
+
+```bash
+URL=$(gcloud run services describe cloudfinops-sentinel \
+      --region=us-central1 --format='value(status.url)')
+TOKEN=$(gcloud secrets versions access latest --secret=sentinel-dashboard-token)
+
+curl -s -H "Authorization: Bearer $TOKEN" "$URL/api/preflight"
+```
+
+Then open `$URL` in a browser and unlock the dashboard with that same token.
+Preflight checks every API, role and write permission the agent depends on and
+prints the exact `gcloud` command that fixes each failure.
+
+The deployment starts with `DRY_RUN=true`. To let it apply changes for real:
+
+```bash
+gcloud run services update cloudfinops-sentinel \
+  --region=us-central1 --update-env-vars=DRY_RUN=false
+```
+
+### Redeploying after a change
+
+```bash
+gcloud run deploy cloudfinops-sentinel --source . --region=us-central1
+```
+
+That rebuilds and ships the code without touching roles, secrets or the
+schedule. Re-run `./deploy/deploy.sh` instead when any of *those* changed — it
+is idempotent and safe to run repeatedly.
 
 ### Persistence
 
